@@ -1,3 +1,4 @@
+import glob
 import time
 import random
 from datetime import datetime
@@ -12,15 +13,14 @@ from torch.utils.tensorboard import SummaryWriter
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from datasets import load_dataset, list_metrics, load_metric
 
-from src.data_process import TorchDataset
+from data_process import TorchDataset
 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-def loadModel(model="distilgpt2"):
-    
-    model = GPT2LMHeadModel.from_pretrained(model)
-    tokenizer = GPT2Tokenizer.from_pretrained(model)
+def loadModel():
+    model = GPT2LMHeadModel.from_pretrained("distilgpt2")
+    tokenizer = GPT2Tokenizer.from_pretrained('distilgpt2')
     tokenizer.pad_token = tokenizer.eos_token
     model.resize_token_embeddings(len(tokenizer))
 
@@ -28,7 +28,9 @@ def loadModel(model="distilgpt2"):
 
 
 def produceDataloader(tokenizer, bs=10):
-    dataset = TorchDataset(list(range(50)), tokenizer)
+    writtenFiles = glob.glob("../data/permuted*")
+    fileIndex = max(map(lambda x: int(x.split(".")[-1]), writtenFiles))
+    dataset = TorchDataset(list(range(fileIndex)), tokenizer)
     dataloader = torch.utils.data.DataLoader(
         dataset,
         batch_size=bs
@@ -49,7 +51,6 @@ def editableTrainLoop(
 
     writer = SummaryWriter()
     total_epochs = epochs
-    n_edit_steps = 10
 
     inner_opt = torch.optim.SGD(model.transformer.h[-3:].parameters(), lr=lr)
 
@@ -69,26 +70,31 @@ def editableTrainLoop(
             lm_labels = lm_mask.masked_fill(lm_mask == 0, -100)
             edit_labels = edit_mask.masked_fill(edit_mask == 0, -100) 
             
-            with higher.innerloop_ctx(model, inner_opt, copy_initial_weights=False) as (fmodel, diffopt):
+            with higher.innerloop_ctx(
+                model, 
+                inner_opt, 
+                copy_initial_weights=False, 
+                track_higher_grads=False
+                ) as (fmodel, diffopt):
                 
                 for edit_step in range(n_edit_steps):
 
                     loss = fmodel(
                         edit_tokens, 
-                        attention_mask=edit_mask
+                        attention_mask=edit_mask,
                         labels=edit_labels
                     ).loss
                     diffopt.step(loss)
-                
+                import ipdb; ipdb.set_trace()
                 base_out = model(
-                    lm_data, 
+                    lm_tokens, 
                     attention_mask=lm_mask,
                     labels=lm_labels
                 )
                 l_base = base_out.loss
                 
                 edit_out = fmodel(
-                    edit_example, 
+                    edit_tokens, 
                     attention_mask=edit_mask,
                     labels=edit_labels
                 )
@@ -107,11 +113,11 @@ def editableTrainLoop(
                 writer.add_scalar("Ledit", l_edit, global_iter)
                 writer.add_scalar("Lloc", l_loc, global_iter)
                 writer.add_scalar("total_loss", total_loss, global_iter)
-        
+        import ipdb; ipdb.set_trace()
         if epoch % 5 == 0:
             timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
-            torch.save(model.state_dict(), f"models/model_epoch{epoch}.{timestamp}")
-            torch.save(fmodel.state_dict(), f"models/fmodel_epoch{epoch}.{timestamp}")
+            torch.save(model.state_dict(), f"../models/model_epoch{epoch}.{timestamp}")
+            torch.save(fmodel.state_dict(), f"../models/fmodel_epoch{epoch}.{timestamp}")
         
     writer.flush()
 
@@ -119,12 +125,12 @@ def editableTrainLoop(
 if __name__ == "__main__":
 
     model, tokenizer = loadModel()
-    dataloader = produceDataloader(tokenizer, bs=10)
+    dataloader = produceDataloader(tokenizer, bs=2)
     editableTrainLoop(
         model, 
         dataloader, 
-        epochs, 
-        n_edit_steps = 10, 
+        5, 
+        n_edit_steps = 3, 
         cedit=0.1, 
         cloc=0.1, 
         lr=0.01

@@ -1,7 +1,8 @@
+import os
 import collections
 import random
 import time
-from concurrent.futures import ProcessPoolExecutor
+from operator import itemgetter
 
 import torch
 import torch.nn as nn
@@ -49,7 +50,7 @@ class DataProcessor:
         self.ents = collections.defaultdict(list)
 
         self.model = spacy.load(
-            "en_core_web_sm", 
+            "en_core_web_md", 
             exclude=['tagger', 'parser', 'attribute_ruler', 'lemmatizer']
         )
         self.model.add_pipe('sentencizer')
@@ -79,6 +80,9 @@ class DataProcessor:
         for idx, (sent, ents) in enumerate(self.ner_texts):
             
             if self.write_dir:
+                if not os.path.exists(self.write_dir):
+                    os.mkdir(self.write_dir)
+                    print(f"Warning: {self.write_dir} does not exist. Creating...")
                 permuteFile = open(self.write_dir + f'/permuted_entities.{idx}', 'w')
                 origFile = open(self.write_dir + f'/original_entities.{idx}', 'w')
                 entFile = open(self.write_dir + f'/entity_swaps.{idx}', 'w')
@@ -140,7 +144,6 @@ class DataProcessor:
 
 class TorchDataset(torch.utils.data.Dataset):
     def __init__(self, list_IDs, tokenizer, max_length=1024):
-        'Initialization'
         self.list_IDs = list_IDs
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -167,17 +170,14 @@ class TorchDataset(torch.utils.data.Dataset):
         
 
     def __len__(self):
-        'Denotes the total number of samples'
         return len(self.list_IDs)
 
     def __getitem__(self, index):
-        'Generates one sample of data'
-        # Select sample
         ID = self.list_IDs[index]
         
-        with open(f"data/original_entities.{ID}") as raw:
+        with open(f"../data/original_entities.{ID}") as raw:
             raw_sample = raw.read()
-        with open(f"data/permuted_entities.{ID}") as perm:
+        with open(f"../data/permuted_entities.{ID}") as perm:
             permuted_sample = perm.read()
         
         raw, perm = self.tokenize([raw_sample, permuted_sample])
@@ -185,23 +185,31 @@ class TorchDataset(torch.utils.data.Dataset):
         return raw, perm
 
 
-def generateDataset(writeDir, set=train, pct=10)
+def generateDataset(writeDir, set='train', pct='10'):
     wikitext = load_dataset(
             'wikitext', 
             'wikitext-103-raw-v1', 
-            cache_dir="/Volumes/External HD/Dev/datasets/wikitext", 
+            # cache_dir="/Volumes/External HD/Dev/datasets/wikitext", 
             split=f'{set}[:{pct}%]'
         )
 
     random.seed(123)
-    passage_idxs = random.sample(range(1, 1e6), 60000)
-    sampleText = filterText(wikitext['text'][passage_idxs])
-    
+    wiki_len = len(wikitext['text']) - 100
+    passage_idxs = random.sample(range(1, wiki_len), 100000)
+    res_list = list(itemgetter(*passage_idxs)(wikitext['text'])) 
+    sampleText = filterText(res_list)
+    print("running processor")
     dp = DataProcessor(sampleText, write_dir=writeDir)
     dp.keep_ents = ['PERSON']
+    print(dp)
     dp.processEnts()
+    print(dp)
     dp.permuteEnts()
+    print(dp)
 
 if __name__ == "__main__":
+
+    print("generating dataset")
+    generateDataset('../data', set='train', pct='100')
 
     
