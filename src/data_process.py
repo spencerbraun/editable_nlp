@@ -75,12 +75,14 @@ class DataProcessor:
     def permuteEnts(self):
         timestamp = time.time()
         
-        if self.write_dir:
-            permuteFile = open(self.write_dir + f'/permuted_entities.{timestamp}', 'w')
-            origFile = open(self.write_dir + f'/original_entities.{timestamp}', 'w')
-            entFile = open(self.write_dir + f'/entity_swaps.{timestamp}', 'w')
             
         for idx, (sent, ents) in enumerate(self.ner_texts):
+            
+            if self.write_dir:
+                permuteFile = open(self.write_dir + f'/permuted_entities.{idx}', 'w')
+                origFile = open(self.write_dir + f'/original_entities.{idx}', 'w')
+                entFile = open(self.write_dir + f'/entity_swaps.{idx}', 'w')
+
             eligible = list(filter(lambda x: x[3] in self.keep_ents, ents))
             orig_ent = random.choice(eligible)
             ent_type = orig_ent[3]
@@ -97,14 +99,14 @@ class DataProcessor:
                 permuteFile.write(new_sent + "\n")
                 origFile.write(self.raw_texts[idx].strip('\n').strip(" ") + "\n")
                 entFile.write(f"{orig_ent[0]}|{replace_ent}\n")
+
+                permuteFile.close()
+                origFile.close()
+                entFile.close()
                 
             self.permuted.append(new_sent)
             self.changed_ents.append((orig_ent[0], replace_ent))
             
-        if self.write_dir:
-            permuteFile.close()
-            origFile.close()
-            entFile.close()
     
     
     def processEnts(self):
