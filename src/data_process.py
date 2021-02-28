@@ -136,3 +136,72 @@ class DataProcessor:
                 f"<{len(self.ner_texts)} NER>"
                 f"<{len(self.permuted)} PERM>"
                 f"<{sum([len(self.ents[k]) for k in self.ents])} ENTS>")
+
+
+class TorchDataset(torch.utils.data.Dataset):
+    def __init__(self, list_IDs, tokenizer, max_length=1024):
+        'Initialization'
+        self.list_IDs = list_IDs
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        
+        
+    def tokenize(self, textList):
+        tokList = []
+        for idx in range(len(textList)):
+            tok = self.tokenizer(
+                self.tokenizer.bos_token + 
+                textList[idx] + 
+                self.tokenizer.eos_token,
+                truncation=True,
+                max_length=self.max_length, 
+                padding="max_length"
+            )
+            tokList.append(
+                (
+                    torch.tensor(tok['input_ids']), 
+                    torch.tensor(tok['attention_mask'])
+                )
+            )
+        return tokList
+        
+
+    def __len__(self):
+        'Denotes the total number of samples'
+        return len(self.list_IDs)
+
+    def __getitem__(self, index):
+        'Generates one sample of data'
+        # Select sample
+        ID = self.list_IDs[index]
+        
+        with open(f"data/original_entities.{ID}") as raw:
+            raw_sample = raw.read()
+        with open(f"data/permuted_entities.{ID}") as perm:
+            permuted_sample = perm.read()
+        
+        raw, perm = self.tokenize([raw_sample, permuted_sample])
+
+        return raw, perm
+
+
+def generateDataset(writeDir, set=train, pct=10)
+    wikitext = load_dataset(
+            'wikitext', 
+            'wikitext-103-raw-v1', 
+            cache_dir="/Volumes/External HD/Dev/datasets/wikitext", 
+            split=f'{set}[:{pct}%]'
+        )
+
+    random.seed(123)
+    passage_idxs = random.sample(range(1, 1e6), 60000)
+    sampleText = filterText(wikitext['text'][passage_idxs])
+    
+    dp = DataProcessor(sampleText, write_dir=writeDir)
+    dp.keep_ents = ['PERSON']
+    dp.processEnts()
+    dp.permuteEnts()
+
+if __name__ == "__main__":
+
+    
