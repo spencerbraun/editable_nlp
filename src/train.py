@@ -10,22 +10,10 @@ import torch.nn.functional as F
 import higher
 from torch.utils.tensorboard import SummaryWriter
 
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
-from datasets import load_dataset, list_metrics, load_metric
-
 from data_process import TorchDataset
-
+from utils import load_model 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-def loadModel():
-    model = GPT2LMHeadModel.from_pretrained("distilgpt2")
-    tokenizer = GPT2Tokenizer.from_pretrained('distilgpt2')
-    tokenizer.pad_token = tokenizer.eos_token
-    model.resize_token_embeddings(len(tokenizer))
-
-    return model, tokenizer
-
 
 def produceDataloader(tokenizer, bs=10):
     writtenFiles = glob.glob("../data/permuted*")
@@ -85,7 +73,7 @@ def editableTrainLoop(
                         labels=edit_labels
                     ).loss
                     diffopt.step(loss)
-                import ipdb; ipdb.set_trace()
+                
                 base_out = model(
                     lm_tokens, 
                     attention_mask=lm_mask,
@@ -108,12 +96,16 @@ def editableTrainLoop(
                 total_loss.backward()
                 global_iter += 1
                 
-                print(f"Epoch: {epoch}; TrainStep {train_step}; L_edit {l_edit} L_base {l_base} L_loc {l_loc}; Total Loss {total_loss}")
+                print(
+                    f"Epoch: {epoch}; TrainStep {train_step}; ",
+                    f"L_edit {l_edit} L_base {l_base} L_loc {l_loc}; ".
+                    f"Total Loss {total_loss}"
+                    )
                 writer.add_scalar("Lbase", l_base, global_iter)
                 writer.add_scalar("Ledit", l_edit, global_iter)
                 writer.add_scalar("Lloc", l_loc, global_iter)
                 writer.add_scalar("total_loss", total_loss, global_iter)
-        import ipdb; ipdb.set_trace()
+        
         if epoch % 5 == 0:
             timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
             torch.save(model.state_dict(), f"../models/model_epoch{epoch}.{timestamp}")

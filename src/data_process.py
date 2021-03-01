@@ -1,3 +1,4 @@
+import argparse
 import os
 import collections
 import random
@@ -143,10 +144,11 @@ class DataProcessor:
 
 
 class TorchDataset(torch.utils.data.Dataset):
-    def __init__(self, list_IDs, tokenizer, max_length=1024):
+    def __init__(self, list_IDs, tokenizer, dataset='train', max_length=1024):
         self.list_IDs = list_IDs
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.dataset = dataset
         
         
     def tokenize(self, textList):
@@ -175,17 +177,36 @@ class TorchDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         ID = self.list_IDs[index]
         
-        with open(f"../data/original_entities.{ID}") as raw:
+        if self.dataset == 'train':
+            path = "../data"
+        elif self.dataset == 'valid':
+            path = "../data/valid"
+        else:
+            raise 
+
+        with open(f"{path}/original_entities.{ID}") as raw:
             raw_sample = raw.read()
-        with open(f"../data/permuted_entities.{ID}") as perm:
-            permuted_sample = perm.read()
-        
-        raw, perm = self.tokenize([raw_sample, permuted_sample])
 
-        return raw, perm
+        if self.dataset == 'train:'
+            with open(f"{path}/permuted_entities.{ID}") as perm:
+                permuted_sample = perm.read()
+            
+            raw, perm = self.tokenize([raw_sample, permuted_sample])
+
+            return raw, perm
+        else: 
+            raw = self.tokenize([raw_sample])
+
+            return raw
 
 
-def generateDataset(writeDir, set='train', pct='10'):
+def generateDataset(
+    writeDir, 
+    process=True,
+    sample=int(1e5),
+    set='train', 
+    pct='10'
+    ):
     wikitext = load_dataset(
             'wikitext', 
             'wikitext-103-raw-v1', 
@@ -195,21 +216,45 @@ def generateDataset(writeDir, set='train', pct='10'):
 
     random.seed(123)
     wiki_len = len(wikitext['text']) - 100
-    passage_idxs = random.sample(range(1, wiki_len), 100000)
+    if wiki_len <= sample:
+        passage_idxs = list(range(wiki_len))
+    else:
+        passage_idxs = random.sample(range(1, wiki_len), sample)
     res_list = list(itemgetter(*passage_idxs)(wikitext['text'])) 
     sampleText = filterText(res_list)
-    print("running processor")
     dp = DataProcessor(sampleText, write_dir=writeDir)
-    dp.keep_ents = ['PERSON']
-    print(dp)
-    dp.processEnts()
-    print(dp)
-    dp.permuteEnts()
-    print(dp)
+
+    if process:
+        print("running processor")
+        dp.keep_ents = ['PERSON']
+        dp.processEnts()
+        print(dp)   
+        dp.permuteEnts()
+        print(dp)
+    else:
+        return dp
 
 if __name__ == "__main__":
+    
 
-    print("generating dataset")
-    generateDataset('../data', set='train', pct='100')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--train', action='store_true', default=False,
+                        help='')
+    parser.add_argument('--valid', action='store_true', default=False,
+                        help='')                        
 
+    args = parser.parse_args()
+
+    if args.train:
+        print("generating training set")
+        generateDataset('../data', set='train', pct='100')
+    
+    if args.valid:
+        print("generating eval set")
+        generateDataset(
+            '../data/valid', 
+            sample=int(5e4), 
+            set='validation', 
+            pct='100'
+            )
     
