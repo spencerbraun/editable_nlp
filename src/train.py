@@ -11,20 +11,9 @@ import higher
 from torch.utils.tensorboard import SummaryWriter
 
 from data_process import TorchDataset
-from utils import load_model 
+from utils import load_model, retrieveDataloader
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-def produceDataloader(tokenizer, bs=10):
-    writtenFiles = glob.glob("../data/permuted*")
-    fileIndex = max(map(lambda x: int(x.split(".")[-1]), writtenFiles))
-    dataset = TorchDataset(list(range(fileIndex)), tokenizer)
-    dataloader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=bs
-    )
-
-    return dataloader
 
 
 def editableTrainLoop(
@@ -110,19 +99,22 @@ def editableTrainLoop(
             timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
             torch.save(model.state_dict(), f"../models/model_epoch{epoch}.{timestamp}")
             torch.save(fmodel.state_dict(), f"../models/fmodel_epoch{epoch}.{timestamp}")
-        
+
+    timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
+    torch.save(model.state_dict(), f"../models/model_epoch_FINAL.{timestamp}")
+    torch.save(fmodel.state_dict(), f"../models/fmodel_epoch_FINAL.{timestamp}")    
     writer.flush()
 
 
 if __name__ == "__main__":
 
-    model, tokenizer = loadModel()
-    dataloader = produceDataloader(tokenizer, bs=2)
+    model, tokenizer = loadOTSModel()
+    dataloader = retrieveDataloader(tokenizer, bs=2, 'train')
     editableTrainLoop(
         model, 
         dataloader, 
         5, 
-        n_edit_steps = 3, 
+        n_edit_steps=3, 
         cedit=0.1, 
         cloc=0.1, 
         lr=0.01

@@ -1,6 +1,6 @@
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 
-def loadModel():
+def loadOTSModel():
     model = GPT2LMHeadModel.from_pretrained("distilgpt2")
     tokenizer = GPT2Tokenizer.from_pretrained('distilgpt2')
     tokenizer.pad_token = tokenizer.eos_token
@@ -8,11 +8,16 @@ def loadModel():
 
     return model, tokenizer
 
-def retrieveDataloader(set='train'):
+def retrieveDataloader(tokenizer, bs=10, dataset='train', max_obs=float('inf')):
 
-    writtenFiles = glob.glob("../data/valid/permuted*")
+    writtenFiles = (
+        glob.glob("../data/permuted*") if dataset == 'train' 
+        else glob.glob("../data/valid/original*")
+        )
+
     fileIndex = max(map(lambda x: int(x.split(".")[-1]), writtenFiles))
-    dataset = TorchDataset(list(range(fileIndex)), tokenizer)
+    limitIndex = min(max_obs, fileIndex)
+    dataset = TorchDataset(list(range(fileIndex)), tokenizer, dataset)
     dataloader = torch.utils.data.DataLoader(
         dataset,
         batch_size=bs
@@ -20,3 +25,10 @@ def retrieveDataloader(set='train'):
 
     return dataloader
 
+
+def loadTrainedModel(modelPath):
+    model, tokenizer = loadOTSModel()
+    model.load_state_dict(torch.load(modelPath))
+    model.eval()
+
+    return model, tokenizer
