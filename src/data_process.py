@@ -144,7 +144,7 @@ class DataProcessor:
 
 
 class TorchDataset(torch.utils.data.Dataset):
-    def __init__(self, list_IDs, tokenizer, dataset='train', max_length=1024):
+    def __init__(self, list_IDs, tokenizer, dataset='train', max_length=512):
         self.list_IDs = list_IDs
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -187,7 +187,7 @@ class TorchDataset(torch.utils.data.Dataset):
         with open(f"{path}/original_entities.{ID}") as raw:
             raw_sample = raw.read()
 
-        if self.dataset == 'train:'
+        if self.dataset == 'train':
             with open(f"{path}/permuted_entities.{ID}") as perm:
                 permuted_sample = perm.read()
             

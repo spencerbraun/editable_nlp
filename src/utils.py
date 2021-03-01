@@ -1,4 +1,8 @@
+import glob
+import torch
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
+from data_process import TorchDataset
+from config import gptConfig
 
 def loadOTSModel():
     model = GPT2LMHeadModel.from_pretrained("distilgpt2")
@@ -17,10 +21,12 @@ def retrieveDataloader(tokenizer, bs=10, dataset='train', max_obs=float('inf')):
 
     fileIndex = max(map(lambda x: int(x.split(".")[-1]), writtenFiles))
     limitIndex = min(max_obs, fileIndex)
-    dataset = TorchDataset(list(range(fileIndex)), tokenizer, dataset)
+    dataset = TorchDataset(list(range(limitIndex)), tokenizer, dataset)
     dataloader = torch.utils.data.DataLoader(
         dataset,
-        batch_size=bs
+        batch_size=bs,
+        num_workers=4,
+        pin_memory=True
     )
 
     return dataloader

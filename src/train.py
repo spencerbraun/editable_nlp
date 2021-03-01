@@ -11,7 +11,7 @@ import higher
 from torch.utils.tensorboard import SummaryWriter
 
 from data_process import TorchDataset
-from utils import load_model, retrieveDataloader
+from utils import loadOTSModel, retrieveDataloader
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -28,12 +28,13 @@ def editableTrainLoop(
 
     writer = SummaryWriter()
     total_epochs = epochs
-
-    inner_opt = torch.optim.SGD(model.transformer.h[-3:].parameters(), lr=lr)
-
-    model.to(device)
+    
     model.train()
+    inner_opt = torch.optim.SGD(model.transformer.h[-3:].parameters(), lr=lr)
+    model.to(device)
+    
     global_iter = 0
+    print("starting training")
 
     for epoch in range(total_epochs):
         
@@ -62,7 +63,7 @@ def editableTrainLoop(
                         labels=edit_labels
                     ).loss
                     diffopt.step(loss)
-                
+
                 base_out = model(
                     lm_tokens, 
                     attention_mask=lm_mask,
@@ -78,18 +79,20 @@ def editableTrainLoop(
                 l_edit = edit_out.loss
                 l_loc = F.kl_div(
                     edit_out.logits,
-                    base_out.logits
+                    base_out.logits,
+                    reduction='batchmean',
+                    log_target=True
                 )
                 
                 total_loss = l_base + cedit * l_edit + cloc * l_loc
                 total_loss.backward()
                 global_iter += 1
                 
-                print(
+                print((
                     f"Epoch: {epoch}; TrainStep {train_step}; ",
-                    f"L_edit {l_edit} L_base {l_base} L_loc {l_loc}; ".
+                    f"L_edit {l_edit} L_base {l_base} L_loc {l_loc}; ",
                     f"Total Loss {total_loss}"
-                    )
+                )) 
                 writer.add_scalar("Lbase", l_base, global_iter)
                 writer.add_scalar("Ledit", l_edit, global_iter)
                 writer.add_scalar("Lloc", l_loc, global_iter)
@@ -109,12 +112,17 @@ def editableTrainLoop(
 if __name__ == "__main__":
 
     model, tokenizer = loadOTSModel()
-    dataloader = retrieveDataloader(tokenizer, bs=2, 'train')
+    dataloader = retrieveDataloader(
+        tokenizer, 
+        bs=2, 
+        dataset='train', 
+        max_obs=10
+    )
     editableTrainLoop(
         model, 
         dataloader, 
-        5, 
-        n_edit_steps=3, 
+        2, 
+        n_edit_steps=2, 
         cedit=0.1, 
         cloc=0.1, 
         lr=0.01

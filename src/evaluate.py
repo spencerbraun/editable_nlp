@@ -21,13 +21,13 @@ from utils import loadTrainedModel, retrieveDataloader
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def perplexity(model, dataloader):
-
+    model.to(DEVICE)
     max_length = model.config.n_positions
     stride = 512
 
     ppls = []
     for batch_idx, lm_data in enumerate(dataloader):
-        lm_tokens, lm_mask = lm_data
+        lm_tokens, lm_mask = lm_data[0]
         # lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
         # lm_labels = lm_mask.masked_fill(lm_mask == 0, -100)
 
@@ -39,9 +39,10 @@ def perplexity(model, dataloader):
             input_ids = lm_tokens[:,begin_loc:end_loc].to(DEVICE)
             target_ids = input_ids.clone()
             target_ids[:,:-trg_len] = -100
+            lm_mask = lm_mask.to(DEVICE)
 
             with torch.no_grad():
-                outputs = model(input_ids, labels=target_ids)
+                outputs = model(input_ids, attention_mask=lm_mask, labels=target_ids)
                 log_likelihood = outputs[0] * trg_len
 
             lls.append(log_likelihood)
@@ -58,7 +59,7 @@ def backupPerplexity(model, dataloader):
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
             lm_labels = lm_mask.masked_fill(lm_mask == 0, -100)
             loss = model(
-                lm_tokens
+                lm_tokens,
                 attention_mask=lm_mask,
                 labels=lm_labels).loss
 
@@ -80,7 +81,7 @@ def runEval(model, dataloader, modelpath=None):
     ppl, pplList = perplexity(model, dataloader)
 
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
-    filename = f"evaluation_{timestamp}{modelpath}"
+    filename = f"evaluation_{timestamp}{os.path.basename(modelpath)}"
     with open(f"../eval/{filename}", "w") as f:
         f.write(ppl)
         f.write("\n")

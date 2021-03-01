@@ -1,6 +1,6 @@
 from transformers import GPT2Config
 
-GPT2Config(
+gptConfig = GPT2Config(
     vocab_size=50257,
     n_positions=1024,
     n_ctx=1024,
