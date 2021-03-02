@@ -147,6 +147,7 @@ class TorchDataset(torch.utils.data.Dataset):
         self.list_IDs = list_IDs
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.ent_length = 5
         self.dataset = dataset
         
         
@@ -156,7 +157,9 @@ class TorchDataset(torch.utils.data.Dataset):
             if ent:
                 tok = self.tokenizer(
                     textList[idx],
-                    truncation=False
+                    truncation=True,
+                    max_length=self.ent_length, 
+                    padding="max_length"
                 )
             else:
                 tok = self.tokenizer(

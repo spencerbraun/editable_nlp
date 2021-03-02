@@ -18,7 +18,7 @@ def perplexity(model, dataloader):
     model.to(DEVICE)
     model.eval()
     with torch.no_grad():
-        for batch_idx, (lm_data, edit_sample, ent) in enumerate(dataloader):
+        for batch_idx, (lm_data, _, _) in enumerate(dataloader):
             lm_tokens, lm_mask = lm_data
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
@@ -41,6 +41,8 @@ def runPPL(model, dataloader, modelpath="None"):
     filename = f"ppl_{timestamp}_{os.path.basename(modelpath)}"
     with open(f"../eval/{filename}", "w") as f:
         f.write(str(int(ppl.cpu().numpy())))
+
+    return ppl
 
 
 def performOneEdit(
@@ -106,10 +108,13 @@ def evalSingleEdits(model, dataloader, model_name):
     model.to(DEVICE)
     for train_step, (lm_data, edit_example, ent) in enumerate(dataloader):
         edit_tokens, edit_mask = edit_example
+        ent_tokens = ent[0].squeeze()
+        ent_tokens = ent_tokens[ent_tokens != 50256].squeeze()
+        
         edit_start_loc = np.min(np.argwhere(
             np.in1d(
                 edit_tokens.numpy(), 
-                ent[0].numpy()
+                ent_tokens.numpy()
                 )
             ).squeeze())
 
@@ -117,7 +122,7 @@ def evalSingleEdits(model, dataloader, model_name):
         edit_labels = edit_tokens.masked_fill(edit_mask == 0, -100) 
         edit_labels.to(DEVICE)
         
-        gold_token = ent[0].cpu().squeeze()
+        gold_token = ent_tokens.cpu()
         gold_token = gold_token.item() if not gold_token.size() else gold_token[0].item()
     
 
@@ -162,14 +167,15 @@ if __name__ == "__main__":
     parser.add_argument('--edit', action='store_true')
     args = parser.parse_args()
 
-    model, tokenizer = loadTrainedModel(args.model_path)
-    # model, tokenizer = loadOTSModel()
+    #model, tokenizer = loadTrainedModel(args.model_path)
+    model, tokenizer = loadOTSModel()
     model.eval()
     
 
     if args.ppl:
-        dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=50)
-        runPPL(model, dataloader, modelpath=args.model_path)
+        dataloader = retrieveDataloader(tokenizer, bs=15, dataset='valid', max_obs=50)
+        ppl = runPPL(model, dataloader, modelpath=args.model_path)
+        print(ppl)
     
     if args.edit:
         dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=20)

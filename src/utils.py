@@ -8,6 +8,7 @@ def loadOTSModel():
     model = GPT2LMHeadModel.from_pretrained("distilgpt2")
     tokenizer = GPT2Tokenizer.from_pretrained('distilgpt2')
     tokenizer.pad_token = tokenizer.eos_token
+    # model.resize_token_embeddings(len(tokenizer))
 
     return model, tokenizer
 
