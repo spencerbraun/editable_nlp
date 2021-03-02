@@ -33,7 +33,7 @@ def perplexity(model, dataloader):
     return torch.exp(torch.mean(torch.stack(total_loss)))
 
 
-def runPPL(model, dataloader, modelpath=None):
+def runPPL(model, dataloader, modelpath="None"):
     
     if not os.path.exists("../eval"):
         os.mkdir("../eval")
@@ -205,8 +205,8 @@ if __name__ == "__main__":
     parser.add_argument('--edit', action='store_true')
     args = parser.parse_args()
 
-    # model, tokenizer = loadTrainedModel(args.model_path)
-    model, tokenizer = loadOTSModel()
+    model, tokenizer = loadTrainedModel(args.model_path)
+    # model, tokenizer = loadOTSModel()
     model.eval()
     
 
