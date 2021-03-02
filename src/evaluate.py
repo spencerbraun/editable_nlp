@@ -1,9 +1,5 @@
-import math
 import argparse
-import tqdm
-import glob
 import os
-import random
 from datetime import datetime
 import numpy as np
 
@@ -11,15 +7,163 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import higher
-from torch.utils.tensorboard import SummaryWriter
-
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
-from datasets import load_dataset, list_metrics, load_metric
 
 from data_process import TorchDataset
-from utils import loadTrainedModel, retrieveDataloader
+from utils import loadTrainedModel, retrieveDataloader, loadOTSModel
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+def perplexity(model, dataloader):
+    total_loss = []
+    model.to(DEVICE)
+    model.eval()
+    with torch.no_grad():
+        for batch_idx, (lm_data, edit_sample, ent) in enumerate(dataloader):
+            lm_tokens, lm_mask = lm_data
+            lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
+            lm_labels = lm_mask.masked_fill(lm_mask == 0, -100)
+            out = model(
+                lm_tokens,
+                # attention_mask=lm_mask,
+                labels=lm_labels)
+
+            loss = out.loss
+            total_loss.append(loss)
+
+    return torch.exp(torch.mean(torch.stack(total_loss)))
+
+
+def runPPL(model, dataloader, modelpath=None):
+    
+    if not os.path.exists("../eval"):
+        os.mkdir("../eval")
+    
+    ppl = perplexity(model, dataloader)
+    
+    timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
+    filename = f"ppl_{timestamp}_{os.path.basename(modelpath)}"
+    with open(f"../eval/{filename}", "w") as f:
+        f.write(str(int(ppl.cpu().numpy())))
+
+
+def performOneEdit(
+    model, 
+    edit_example,
+    n_edit_steps = 10, 
+    cedit=0.1, 
+    cloc=0.1, 
+    lr=0.01
+    ):
+    
+    model.train()
+    inner_opt = torch.optim.SGD(model.transformer.h[-3:].parameters(), lr=lr)
+    
+    print("starting edit")
+
+    edit_tokens, edit_mask = edit_example
+    edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
+    edit_labels = edit_mask.masked_fill(edit_mask == 0, -100) 
+    
+    with higher.innerloop_ctx(
+        model, 
+        inner_opt, 
+        copy_initial_weights=False, 
+        track_higher_grads=False
+        ) as (fmodel, diffopt):
+        
+        for edit_step in range(n_edit_steps):
+
+            loss = fmodel(
+                edit_tokens, 
+                attention_mask=edit_mask,
+                labels=edit_labels
+            ).loss
+            diffopt.step(loss)
+
+            print(f"Edit step {edit_step}; loss {loss} ") 
+
+        return fmodel
+
+def getIndexedProbs(model, index, gold_token, sent_tokens, mask, labels):
+       
+    model.eval()
+    with torch.no_grad():
+        output = model(
+            sent_tokens, 
+            attention_mask=mask,
+            labels=labels
+        )
+        probs = (
+            output.logits[:,index,:]
+            .softmax(dim=-1).detach().cpu().squeeze()
+            )
+        ranking = np.where(torch.argsort(probs).numpy() == gold_token)
+        rank = ranking[0].item()
+
+    return rank
+
+def evalSingleEdits(model, dataloader, model_name):
+    
+    outcomes = []
+    
+    model.to(DEVICE)
+    for train_step, (lm_data, edit_example, ent) in enumerate(dataloader):
+        edit_tokens, edit_mask = edit_example
+        edit_start_loc = np.min(np.argwhere(
+            np.in1d(
+                edit_tokens.numpy(), 
+                ent[0].numpy()
+                )
+            ).squeeze())
+
+        edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
+        edit_labels = edit_mask.masked_fill(edit_mask == 0, -100) 
+        edit_labels.to(DEVICE)
+        
+        gold_token = ent[0].cpu().squeeze()
+        gold_token = gold_token.item() if not gold_token.size() else gold_token[0].item()
+    
+
+        orig_rank = getIndexedProbs(
+            model, 
+            edit_start_loc, 
+            gold_token, 
+            edit_tokens, 
+            edit_mask, 
+            edit_labels
+            )
+
+        model_out = performOneEdit(model, edit_example)
+                
+        new_rank = getIndexedProbs(
+            model_out, 
+            edit_start_loc, 
+            gold_token, 
+            edit_tokens, 
+            edit_mask, 
+            edit_labels
+            )
+        
+        success = new_rank < orig_rank
+        success_diff = orig_rank - new_rank
+
+        outcomes.append((train_step, success, success_diff))
+
+    timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
+    filename = f"edit_success_{timestamp}_{os.path.basename(model_name)}"
+    with open(f"../eval/{filename}", "w") as f:
+        f.write("\n".join([f"{x[0]},{x[1]},{x[2]}" for x in outcomes]))
+        f.write("\n")
+    
+    success_pct = sum([x[1] for x in outcomes]) / len(outcomes)
+    return success_pct
+
+
+# def score(sentence):
+#     tokenize_input = tokenizer.tokenize(sentence)
+#     tensor_input = torch.tensor([tokenizer.convert_tokens_to_ids(tokenize_input)])
+#     loss=model(tensor_input, lm_labels=tensor_input)
+#     return math.exp(loss)
 
 # def perplexity(model, dataloader):
 #     model.to(DEVICE)
@@ -53,152 +197,6 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 #     return np.mean(np.array(ppls)), ppls
 
-def backupPerplexity(model, dataloader):
-    total_loss = []
-    model.to(DEVICE)
-    model.eval()
-    with torch.no_grad():
-        for batch_idx, (lm_data, _) in enumerate(dataloader):
-            lm_tokens, lm_mask = lm_data
-            lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
-            lm_labels = lm_mask.masked_fill(lm_mask == 0, -100)
-            out = model(
-                lm_tokens,
-                attention_mask=lm_mask,
-                labels=lm_labels)
-
-            loss = out.loss
-            total_loss.append(loss)
-
-    return torch.exp(torch.mean(torch.stack(total_loss)))
-
-
-
-def runPPL(model, dataloader, modelpath=None):
-    
-    if not os.path.exists("../eval"):
-        os.mkdir("../eval")
-    
-    ppl = backupPerplexity(model, dataloader)
-    
-    timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
-    filename = f"evaluation_{timestamp}{os.path.basename(modelpath)}"
-    with open(f"../eval/{filename}", "w") as f:
-        f.write(str(int(ppl.cpu().numpy())))
-
-
-# def score(sentence):
-#     tokenize_input = tokenizer.tokenize(sentence)
-#     tensor_input = torch.tensor([tokenizer.convert_tokens_to_ids(tokenize_input)])
-#     loss=model(tensor_input, lm_labels=tensor_input)
-#     return math.exp(loss)
-
-
-def performOneEdit(
-    model, 
-    lm_data, 
-    edit_example,
-    n_edit_steps = 10, 
-    cedit=0.1, 
-    cloc=0.1, 
-    lr=0.01
-    ):
-    
-    model.train()
-    inner_opt = torch.optim.SGD(model.transformer.h[-3:].parameters(), lr=lr)
-    
-    print("starting edit")
-
-    lm_tokens, lm_mask = lm_data
-    lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
-    edit_tokens, edit_mask = edit_example
-    edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
-    
-    lm_labels = lm_mask.masked_fill(lm_mask == 0, -100)
-    edit_labels = edit_mask.masked_fill(edit_mask == 0, -100) 
-    
-    with higher.innerloop_ctx(
-        model, 
-        inner_opt, 
-        copy_initial_weights=False, 
-        track_higher_grads=False
-        ) as (fmodel, diffopt):
-        
-        for edit_step in range(n_edit_steps):
-
-            loss = fmodel(
-                edit_tokens, 
-                attention_mask=edit_mask,
-                labels=edit_labels
-            ).loss
-            diffopt.step(loss)
-
-        base_out = model(
-            lm_tokens, 
-            attention_mask=lm_mask,
-            labels=lm_labels
-        )
-        l_base = base_out.loss
-        
-        edit_out = fmodel(
-            edit_tokens, 
-            attention_mask=edit_mask,
-            labels=edit_labels
-        )
-        l_edit = edit_out.loss
-        l_loc = F.kl_div(
-            edit_out.logits,
-            base_out.logits,
-            reduction='batchmean',
-            log_target=True
-        )
-        
-        total_loss = l_base + cedit * l_edit + cloc * l_loc
-        total_loss.backward()
-
-        print((
-            f"One edit: ",
-            f"L_edit {l_edit} L_base {l_base} L_loc {l_loc}; ",
-            f"Total Loss {total_loss}"
-        )) 
-
-    return model
-
-def evalSingleEdits(model, dataloader):
-
-    losses = []
-    drawdown = []
-    model.to(DEVICE)
-    for train_step, (lm_data, edit_example) in enumerate(dataloader):
-        edit_tokens, edit_mask = edit_example
-        edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
-        edit_labels = edit_mask.masked_fill(edit_mask == 0, -100) 
-        edit_labels.to(DEVICE)
-        model.eval()
-
-        loss = model(
-            edit_tokens, 
-            attention_mask=edit_mask,
-            labels=edit_labels
-        ).loss
-
-
-        model_out = performOneEdit(model, lm_data, edit_example)
-        model_out.eval()
-
-        edit_loss = model_out(
-            edit_tokens, 
-            attention_mask=edit_mask,
-            labels=edit_labels
-        ).loss
-
-        drawdown.append(torch.exp(loss) - torch.exp(edit_loss))
-        losses.append(loss - edit_loss)
-
-    return drawdown, losses
-
-
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -207,15 +205,17 @@ if __name__ == "__main__":
     parser.add_argument('--edit', action='store_true')
     args = parser.parse_args()
 
-    model, tokenizer = loadTrainedModel(args.model_path)
+    # model, tokenizer = loadTrainedModel(args.model_path)
+    model, tokenizer = loadOTSModel()
     model.eval()
     
 
     if args.ppl:
-        dataloader = retrieveDataloader(tokenizer, bs=10, dataset='valid', max_obs=50)
+        dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=50)
         runPPL(model, dataloader, modelpath=args.model_path)
     
     if args.edit:
-        dataloader = retrieveDataloader(tokenizer, bs=2, dataset='valid', max_obs=50)
-        drawdown, losses = evalSingleEdits(model, dataloader)
-        import ipdb; ipdb.set_trace()
+        dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=20)
+        success_pct = evalSingleEdits(model, dataloader, args.model_path)
+        print(f"Success Pct: {success_pct}"")
+        

@@ -39,7 +39,7 @@ def editableTrainLoop(
 
     for epoch in range(total_epochs):
         
-        for train_step, (lm_data, edit_example) in enumerate(dataloader):
+        for train_step, (lm_data, edit_example, _) in enumerate(dataloader):
             
             lm_tokens, lm_mask = lm_data
             lm_tokens, lm_mask = lm_tokens.to(device), lm_mask.to(device)

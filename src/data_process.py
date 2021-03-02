@@ -13,7 +13,6 @@ import spacy
 from datasets import load_dataset, list_metrics, load_metric
 
 
-
 def is_ascii(s):
     return all(ord(c) < 128 for c in s)
 
@@ -151,24 +150,32 @@ class TorchDataset(torch.utils.data.Dataset):
         self.dataset = dataset
         
         
-    def tokenize(self, textList):
+    def tokenize(self, textList, ent=False):
         tokList = []
         for idx in range(len(textList)):
-            tok = self.tokenizer(
-                self.tokenizer.bos_token + 
-                textList[idx] + 
-                self.tokenizer.eos_token,
-                truncation=True,
-                max_length=self.max_length, 
-                padding="max_length"
-            )
+            if ent:
+                tok = self.tokenizer(
+                    textList[idx],
+                    truncation=False
+                )
+            else:
+                tok = self.tokenizer(
+                    self.tokenizer.bos_token + 
+                    textList[idx] + 
+                    self.tokenizer.eos_token,
+                    truncation=True,
+                    max_length=self.max_length, 
+                    padding="max_length"
+                )
             tokList.append(
                 (
                     torch.tensor(tok['input_ids']), 
                     torch.tensor(tok['attention_mask'])
                 )
             )
-        return tokList
+        if len(tokList) > 1:
+            return tokList
+        return tokList[0]
         
 
     def __len__(self):
@@ -181,17 +188,19 @@ class TorchDataset(torch.utils.data.Dataset):
             path = "../data"
         elif self.dataset == 'valid':
             path = "../data/valid"
-        else:
-            raise 
 
         with open(f"{path}/original_entities.{ID}") as raw:
             raw_sample = raw.read()
         with open(f"{path}/permuted_entities.{ID}") as perm:
             permuted_sample = perm.read()
-        
-        raw, perm = self.tokenize([raw_sample, permuted_sample])
+        with open(f"{path}/entity_swaps.{ID}") as ent:
+            ent_sample = ent.read()
+            new_ent = ent_sample.strip().split('|')[-1]
 
-        return raw, perm
+        raw, perm = self.tokenize([raw_sample, permuted_sample])
+        ent = self.tokenize([" "+new_ent], ent=True)
+
+        return raw, perm, ent
 
 
 def generateDataset(
