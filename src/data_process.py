@@ -186,18 +186,12 @@ class TorchDataset(torch.utils.data.Dataset):
 
         with open(f"{path}/original_entities.{ID}") as raw:
             raw_sample = raw.read()
+        with open(f"{path}/permuted_entities.{ID}") as perm:
+            permuted_sample = perm.read()
+        
+        raw, perm = self.tokenize([raw_sample, permuted_sample])
 
-        if self.dataset == 'train':
-            with open(f"{path}/permuted_entities.{ID}") as perm:
-                permuted_sample = perm.read()
-            
-            raw, perm = self.tokenize([raw_sample, permuted_sample])
-
-            return raw, perm
-        else: 
-            raw = self.tokenize([raw_sample])
-
-            return raw
+        return raw, perm
 
 
 def generateDataset(
