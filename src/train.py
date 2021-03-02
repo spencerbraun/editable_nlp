@@ -45,8 +45,8 @@ def editableTrainLoop(
             edit_tokens, edit_mask = edit_example
             edit_tokens, edit_mask = edit_tokens.to(device), edit_mask.to(device)
             
-            lm_labels = lm_mask.masked_fill(lm_mask == 0, -100)
-            edit_labels = edit_mask.masked_fill(edit_mask == 0, -100) 
+            lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
+            edit_labels = edit_tokens.masked_fill(edit_mask == 0, -100) 
             
             with higher.innerloop_ctx(
                 model, 
