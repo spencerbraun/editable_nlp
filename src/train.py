@@ -16,7 +16,6 @@ from utils import loadOTSModel, retrieveDataloader
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
-
 def editableTrainLoop(
     model, 
     dataloader, 
@@ -109,82 +108,6 @@ def editableTrainLoop(
     torch.save(fmodel.state_dict(), f"../models/fmodel_epoch_FINAL.{timestamp}")    
     writer.flush()
 
-
-def performOneEdit(
-    model, 
-    lm_data, 
-    edit_example,
-    n_edit_steps = 10, 
-    cedit=0.1, 
-    cloc=0.1, 
-    lr=0.01
-    ):
-
-    total_epochs = epochs
-    
-    model.train()
-    inner_opt = torch.optim.SGD(model.transformer.h[-3:].parameters(), lr=lr)
-    model.to(device)
-    
-    global_iter = 0
-    print("starting edit")
-
-
-    lm_tokens, lm_mask = lm_data
-    lm_tokens, lm_mask = lm_tokens.to(device), lm_mask.to(device)
-    edit_tokens, edit_mask = edit_example
-    edit_tokens, edit_mask = edit_tokens.to(device), edit_mask.to(device)
-    
-    lm_labels = lm_mask.masked_fill(lm_mask == 0, -100)
-    edit_labels = edit_mask.masked_fill(edit_mask == 0, -100) 
-    
-    with higher.innerloop_ctx(
-        model, 
-        inner_opt, 
-        copy_initial_weights=False, 
-        track_higher_grads=False
-        ) as (fmodel, diffopt):
-        
-        for edit_step in range(n_edit_steps):
-
-            loss = fmodel(
-                edit_tokens, 
-                attention_mask=edit_mask,
-                labels=edit_labels
-            ).loss
-            diffopt.step(loss)
-
-        base_out = model(
-            lm_tokens, 
-            attention_mask=lm_mask,
-            labels=lm_labels
-        )
-        l_base = base_out.loss
-        
-        edit_out = fmodel(
-            edit_tokens, 
-            attention_mask=edit_mask,
-            labels=edit_labels
-        )
-        l_edit = edit_out.loss
-        l_loc = F.kl_div(
-            edit_out.logits,
-            base_out.logits,
-            reduction='batchmean',
-            log_target=True
-        )
-        
-        total_loss = l_base + cedit * l_edit + cloc * l_loc
-        total_loss.backward()
-        global_iter += 1
-        
-        print((
-            f"One edit: ",
-            f"L_edit {l_edit} L_base {l_base} L_loc {l_loc}; ",
-            f"Total Loss {total_loss}"
-        )) 
-
-    return model
 
 if __name__ == "__main__":
 
