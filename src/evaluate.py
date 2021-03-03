@@ -121,12 +121,15 @@ def evalSingleEdits(model, dataloader, model_name):
             ent_tokens = ent[0].squeeze()
             ent_tokens = ent_tokens[ent_tokens != 50256].squeeze()
             
-            edit_start_loc = np.min(np.argwhere(
-                np.in1d(
-                    edit_tokens.numpy(), 
-                    ent_tokens.numpy()
-                    )
-                ).squeeze())
+            try:
+                edit_start_loc = np.min(np.argwhere(
+                    np.in1d(
+                        edit_tokens.numpy(), 
+                        ent_tokens.numpy()
+                        )
+                    ).squeeze())
+            except:
+                continue
 
             edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
             edit_labels = edit_tokens.masked_fill(edit_mask == 0, -100) 
@@ -179,8 +182,8 @@ if __name__ == "__main__":
     parser.add_argument('--edit', action='store_true')
     args = parser.parse_args()
 
-    model, tokenizer = loadOTSModel()
-    # model, tokenizer = loadTrainedModel(args.model_path)
+    model_ots, _ = loadOTSModel()
+    model, tokenizer = loadTrainedModel(args.model_path)
     
     
 
@@ -191,7 +194,9 @@ if __name__ == "__main__":
         print(ppl)
     
     if args.edit:
-        dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=20)
+        dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=50)
         success_pct, outcomes = evalSingleEdits(model, dataloader, args.model_path)
-        print(f"Success Pct: {success_pct}")
+        success_pct_ots, outcomes_ots = evalSingleEdits(model_ots, dataloader, "OTS")
+        print(f"Success Pct Trained: {success_pct}")
+        print(f"Success Pct OTS: {success_pct_ots}\n")
         
