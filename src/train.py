@@ -65,14 +65,12 @@ def editableTrainLoop(
                     ).loss
                     diffopt.step(loss)
 
-                
                 edit_out = fmodel(
                     edit_tokens, 
                     attention_mask=edit_mask,
                     labels=edit_labels
                 )
-                l_edit = cedit * edit_out.loss
-                l_edit.backward() #TODO: does this make a memory difference
+                l_edit = edit_out.loss
                 
                 base_out = model(
                     lm_tokens, 
@@ -86,17 +84,21 @@ def editableTrainLoop(
                     attention_mask=lm_mask,
                     labels=lm_labels
                 )
-                l_loc = F.kl_div(
-                    edited_base_out.logits,
-                    base_out.logits,
-                    reduction='batchmean',
-                    log_target=True
+
+                kl_loss = nn.KLDivLoss(reduction = 'batchmean')
+                l_loc = kl_loss(
+                    F.log_softmax(edited_base_out.logits, dim=-1),
+                    F.softmax(base_out.logits, dim=-1)
                 )
                 
-                total_loss = l_base + cloc * l_loc
+                
+                total_loss = l_base + cedit * l_edit + cloc * l_loc
                 total_loss.backward()
-                opt.step()
-                opt.zero_grad()
+
+                # accumulate grads 
+                if train_step % 5 == 0:
+                    opt.step()
+                    opt.zero_grad()
                 
                 global_iter += 1
                 
@@ -110,14 +112,20 @@ def editableTrainLoop(
                 writer.add_scalar("Lloc", l_loc, global_iter)
                 writer.add_scalar("total_loss", total_loss, global_iter)
         
-        if epoch % 5 == 0:
-            timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
-            torch.save(model.state_dict(), f"../models/model_epoch{epoch}.{timestamp}")
-            torch.save(fmodel.state_dict(), f"../models/fmodel_epoch{epoch}.{timestamp}")
+            if train_step % 500 == 0:
+                timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
+                torch.save(
+                    model.state_dict(), 
+                    f"../models/model_epoch{epoch}_ts{train_step}.{timestamp}"
+                    )
+                torch.save(
+                    fmodel.state_dict(), 
+                    f"../models/fmodel_epoch{epoch}_ts{train_step}.{timestamp}"
+                    )
 
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
     torch.save(model.state_dict(), f"../models/model_epoch_FINAL.{timestamp}")
-    torch.save(fmodel.state_dict(), f"../models/fmodel_epoch_FINAL.{timestamp}")    
+    # torch.save(fmodel.state_dict(), f"../models/fmodel_epoch_FINAL.{timestamp}")    
     writer.flush()
 
 
@@ -126,16 +134,16 @@ if __name__ == "__main__":
     model, tokenizer = loadOTSModel()
     dataloader = retrieveDataloader(
         tokenizer, 
-        bs=2, 
-        dataset='train', 
-        max_obs=10
+        bs=1, 
+        dataset='train'
+        # max_obs=10
     )
     editableTrainLoop(
         model, 
         dataloader, 
-        2, 
-        n_edit_steps=2, 
-        cedit=0.1, 
-        cloc=0.1, 
-        lr=0.01
+        epochs=1,
+        n_edit_steps=1, 
+        cedit=1, 
+        cloc=1, 
+        lr=1e-3
     )

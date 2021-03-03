@@ -14,7 +14,7 @@ from utils import loadTrainedModel, retrieveDataloader, loadOTSModel
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-def perplexity(model, dataloader, tokenizer):
+def perplexity(model, dataloader):
     total_loss = []
     model.to(DEVICE)
     model.eval()
@@ -22,8 +22,7 @@ def perplexity(model, dataloader, tokenizer):
         for batch_idx, (lm_data, _, _) in enumerate(dataloader):
             lm_tokens, lm_mask = lm_data
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
-            lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100) #TODO: make sure mask is functioning properly using tokenizer
-            import ipdb; ipdb.set_trace()
+            lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
             out = model(lm_tokens, labels=lm_labels)
 
             loss = out.loss
@@ -32,7 +31,7 @@ def perplexity(model, dataloader, tokenizer):
     return torch.exp(torch.mean(torch.stack(total_loss)))
 
 
-def runPPL(model, dataloader, tokenizer, modelpath="None"):
+def runPPL(model, dataloader, modelpath="None"):
     
     if not os.path.exists("../eval"):
         os.mkdir("../eval")
@@ -60,8 +59,8 @@ def performOneEdit(
     edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
     edit_labels = edit_tokens.masked_fill(edit_mask == 0, -100) 
     
-    model.train() #TODO: fix to make updates like to training function
-    model_ = copy.deepcopy(model) #fill in TODO
+    model.train()
+    model_ = copy.deepcopy(model)
     inner_opt = torch.optim.SGD(model.transformer.h[-3:].parameters(), lr=lr)
     print("starting edit")
     with higher.innerloop_ctx(
@@ -82,8 +81,9 @@ def performOneEdit(
 
             print(f"Edit step {edit_step}; loss {loss} ") 
         
-        for p_, fp in zip(model_.parameters(), fmodel.parameters()):
-            p_[:] = fp[:]
+        # for p_, fp in zip(model_.parameters(), fmodel.parameters()):
+        #     p_[:] = fp[:]
+        model_.load_state_dict(fmodel.state_dict())
     
     return model_
 
@@ -100,10 +100,7 @@ def getIndexedProbs(model, index, gold_token, sent_tokens, mask, labels):
             output.logits[:,index,:]
             .softmax(dim=-1).detach().cpu().squeeze()
             )
-        
         rank = torch.sum(probs > probs[gold_token]) 
-        # ranking = np.where(torch.argsort(probs).numpy() == gold_token)
-        # rank = ranking[0].item()
 
     return rank
 
@@ -112,65 +109,68 @@ def evalSingleEdits(model, dataloader, model_name):
     outcomes = []
     
     model.to(DEVICE)
-    for train_step, (lm_data, edit_example, ent) in enumerate(dataloader):
-        edit_tokens, edit_mask = edit_example
-        ent_tokens = ent[0].squeeze()
-        ent_tokens = ent_tokens[ent_tokens != 50256].squeeze()
-        
-        edit_start_loc = np.min(np.argwhere(
-            np.in1d(
-                edit_tokens.numpy(), 
-                ent_tokens.numpy()
-                )
-            ).squeeze())
-
-        edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
-        edit_labels = edit_tokens.masked_fill(edit_mask == 0, -100) 
-        edit_labels.to(DEVICE)
-        
-        gold_token = ent_tokens.cpu()
-        gold_token = gold_token.item() if not gold_token.size() else gold_token[0].item()
-    
-
-        orig_rank = getIndexedProbs(
-            model, 
-            edit_start_loc, 
-            gold_token, 
-            edit_tokens, 
-            edit_mask, 
-            edit_labels
-            )
-        orig_ppl = perplexity(model, dataloader)
-
-        model_out = performOneEdit(model, edit_example)
-                
-        new_rank = getIndexedProbs(
-            model_out, 
-            edit_start_loc, 
-            gold_token, 
-            edit_tokens, 
-            edit_mask, 
-            edit_labels
-            )
-        new_ppl = perplexity(model_out, dataloader)
-
-        success = new_rank < orig_rank
-        success_diff = orig_rank - new_rank
-
-        outcomes.append((
-            train_step, success, success_diff, 
-            new_rank, new_ppl, orig_rank, orig_ppl
-            ))
-
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
     filename = f"edit_success_{timestamp}_{os.path.basename(model_name)}"
     with open(f"../eval/{filename}", "w") as f:
-        for run in outcomes:
-            writeStr = ",".join([x for x in run])
+        f.write((
+            "train_step,success,success_diff,"
+            "new_rank,new_ppl,orig_rank,orig_ppl\n"
+            ))
+        for train_step, (lm_data, edit_example, ent) in enumerate(dataloader):
+            edit_tokens, edit_mask = edit_example
+            ent_tokens = ent[0].squeeze()
+            ent_tokens = ent_tokens[ent_tokens != 50256].squeeze()
+            
+            edit_start_loc = np.min(np.argwhere(
+                np.in1d(
+                    edit_tokens.numpy(), 
+                    ent_tokens.numpy()
+                    )
+                ).squeeze())
+
+            edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
+            edit_labels = edit_tokens.masked_fill(edit_mask == 0, -100) 
+            edit_labels.to(DEVICE)
+            
+            gold_token = ent_tokens.cpu()
+            gold_token = gold_token.item() if not gold_token.size() else gold_token[0].item()
+
+            orig_rank = getIndexedProbs(
+                model, 
+                edit_start_loc, 
+                gold_token, 
+                edit_tokens, 
+                edit_mask, 
+                edit_labels
+                )
+            orig_ppl = perplexity(model, dataloader)
+
+            model_out = performOneEdit(model, edit_example)
+                    
+            new_rank = getIndexedProbs(
+                model_out, 
+                edit_start_loc, 
+                gold_token, 
+                edit_tokens, 
+                edit_mask, 
+                edit_labels
+                )
+            new_ppl = perplexity(model_out, dataloader)
+
+            success = new_rank < orig_rank
+            success_diff = orig_rank - new_rank
+
+            run = (
+                train_step, success, success_diff, 
+                new_rank, new_ppl, orig_rank, orig_ppl
+                )
+            outcomes.append(run)
+            form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
+            writeStr = ",".join([form(x) for x in run])
             f.write(f"{writeStr}\n")
-    
+        
     success_pct = sum([x[1] for x in outcomes]) / len(outcomes)
-    return success_pct
+    return success_pct, outcomes
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -179,18 +179,19 @@ if __name__ == "__main__":
     parser.add_argument('--edit', action='store_true')
     args = parser.parse_args()
 
-    model, tokenizer = loadTrainedModel(args.model_path)
-    model_ots, tokenizer_ots = loadOTSModel()
+    model, tokenizer = loadOTSModel()
+    # model, tokenizer = loadTrainedModel(args.model_path)
+    
     
 
     if args.ppl:
         dataloader = retrieveDataloader(tokenizer, bs=15, dataset='valid', max_obs=50)
-        ppl_ots = runPPL(model_ots, dataloader, tokenizer, modelpath="ots")
-        ppl = runPPL(model, dataloader, tokenizer, modelpath=args.model_path)
+        ppl = runPPL(model_ots, dataloader, tokenizer, modelpath="ots")
+        # ppl = runPPL(model, dataloader, tokenizer, modelpath=args.model_path)
         print(ppl)
     
     if args.edit:
         dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=20)
-        success_pct = evalSingleEdits(model, dataloader, args.model_path)
+        success_pct, outcomes = evalSingleEdits(model, dataloader, args.model_path)
         print(f"Success Pct: {success_pct}")
         
