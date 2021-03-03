@@ -143,7 +143,7 @@ class DataProcessor:
 
 
 class TorchDataset(torch.utils.data.Dataset):
-    def __init__(self, list_IDs, tokenizer, dataset='train', max_length=512):
+    def __init__(self, list_IDs, tokenizer, dataset='train', max_length=200):
         self.list_IDs = list_IDs
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -163,9 +163,7 @@ class TorchDataset(torch.utils.data.Dataset):
                 )
             else:
                 tok = self.tokenizer(
-                    self.tokenizer.bos_token + 
-                    textList[idx] + 
-                    self.tokenizer.eos_token,
+                    textList[idx],
                     truncation=True,
                     max_length=self.max_length, 
                     padding="max_length"
@@ -185,6 +183,8 @@ class TorchDataset(torch.utils.data.Dataset):
         return len(self.list_IDs)
 
     def __getitem__(self, index):
+        ## TODO: make this specific to a batch 
+        
         ID = self.list_IDs[index]
         
         if self.dataset == 'train':

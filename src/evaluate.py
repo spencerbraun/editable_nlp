@@ -1,3 +1,4 @@
+import copy 
 import argparse
 import os
 from datetime import datetime
@@ -13,7 +14,7 @@ from utils import loadTrainedModel, retrieveDataloader, loadOTSModel
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-def perplexity(model, dataloader):
+def perplexity(model, dataloader, tokenizer):
     total_loss = []
     model.to(DEVICE)
     model.eval()
@@ -21,7 +22,8 @@ def perplexity(model, dataloader):
         for batch_idx, (lm_data, _, _) in enumerate(dataloader):
             lm_tokens, lm_mask = lm_data
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
-            lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
+            lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100) #TODO: make sure mask is functioning properly using tokenizer
+            import ipdb; ipdb.set_trace()
             out = model(lm_tokens, labels=lm_labels)
 
             loss = out.loss
@@ -30,12 +32,12 @@ def perplexity(model, dataloader):
     return torch.exp(torch.mean(torch.stack(total_loss)))
 
 
-def runPPL(model, dataloader, modelpath="None"):
+def runPPL(model, dataloader, tokenizer, modelpath="None"):
     
     if not os.path.exists("../eval"):
         os.mkdir("../eval")
     
-    ppl = perplexity(model, dataloader)
+    ppl = perplexity(model, dataloader, tokenizer)
     
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
     filename = f"ppl_{timestamp}_{os.path.basename(modelpath)}"
@@ -48,21 +50,20 @@ def runPPL(model, dataloader, modelpath="None"):
 def performOneEdit(
     model, 
     edit_example,
-    n_edit_steps = 10, 
+    n_edit_steps = 5, 
     cedit=0.1, 
     cloc=0.1, 
     lr=0.01
     ):
     
-    model.train()
-    inner_opt = torch.optim.SGD(model.transformer.h[-3:].parameters(), lr=lr)
-    
-    print("starting edit")
-
     edit_tokens, edit_mask = edit_example
     edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
     edit_labels = edit_tokens.masked_fill(edit_mask == 0, -100) 
     
+    model.train() #TODO: fix to make updates like to training function
+    model_ = copy.deepcopy(model) #fill in TODO
+    inner_opt = torch.optim.SGD(model.transformer.h[-3:].parameters(), lr=lr)
+    print("starting edit")
     with higher.innerloop_ctx(
         model, 
         inner_opt, 
@@ -80,8 +81,11 @@ def performOneEdit(
             diffopt.step(loss)
 
             print(f"Edit step {edit_step}; loss {loss} ") 
-
-        return fmodel
+        
+        for p_, fp in zip(model_.parameters(), fmodel.parameters()):
+            p_[:] = fp[:]
+    
+    return model_
 
 def getIndexedProbs(model, index, gold_token, sent_tokens, mask, labels):
        
@@ -96,8 +100,10 @@ def getIndexedProbs(model, index, gold_token, sent_tokens, mask, labels):
             output.logits[:,index,:]
             .softmax(dim=-1).detach().cpu().squeeze()
             )
-        ranking = np.where(torch.argsort(probs).numpy() == gold_token)
-        rank = ranking[0].item()
+        
+        rank = torch.sum(probs > probs[gold_token]) 
+        # ranking = np.where(torch.argsort(probs).numpy() == gold_token)
+        # rank = ranking[0].item()
 
     return rank
 
@@ -134,6 +140,7 @@ def evalSingleEdits(model, dataloader, model_name):
             edit_mask, 
             edit_labels
             )
+        orig_ppl = perplexity(model, dataloader)
 
         model_out = performOneEdit(model, edit_example)
                 
@@ -145,17 +152,22 @@ def evalSingleEdits(model, dataloader, model_name):
             edit_mask, 
             edit_labels
             )
-        
+        new_ppl = perplexity(model_out, dataloader)
+
         success = new_rank < orig_rank
         success_diff = orig_rank - new_rank
 
-        outcomes.append((train_step, success, success_diff))
+        outcomes.append((
+            train_step, success, success_diff, 
+            new_rank, new_ppl, orig_rank, orig_ppl
+            ))
 
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
     filename = f"edit_success_{timestamp}_{os.path.basename(model_name)}"
     with open(f"../eval/{filename}", "w") as f:
-        f.write("\n".join([f"{x[0]},{x[1]},{x[2]}" for x in outcomes]))
-        f.write("\n")
+        for run in outcomes:
+            writeStr = ",".join([x for x in run])
+            f.write(f"{writeStr}\n")
     
     success_pct = sum([x[1] for x in outcomes]) / len(outcomes)
     return success_pct
@@ -167,14 +179,14 @@ if __name__ == "__main__":
     parser.add_argument('--edit', action='store_true')
     args = parser.parse_args()
 
-    #model, tokenizer = loadTrainedModel(args.model_path)
-    model, tokenizer = loadOTSModel()
-    model.eval()
+    model, tokenizer = loadTrainedModel(args.model_path)
+    model_ots, tokenizer_ots = loadOTSModel()
     
 
     if args.ppl:
         dataloader = retrieveDataloader(tokenizer, bs=15, dataset='valid', max_obs=50)
-        ppl = runPPL(model, dataloader, modelpath=args.model_path)
+        ppl_ots = runPPL(model_ots, dataloader, tokenizer, modelpath="ots")
+        ppl = runPPL(model, dataloader, tokenizer, modelpath=args.model_path)
         print(ppl)
     
     if args.edit:

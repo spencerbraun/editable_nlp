@@ -20,7 +20,7 @@ def editableTrainLoop(
     model, 
     dataloader, 
     epochs, 
-    n_edit_steps = 10, 
+    n_edit_steps=1, 
     cedit=0.1, 
     cloc=0.1, 
     lr=0.01
@@ -30,7 +30,7 @@ def editableTrainLoop(
     total_epochs = epochs
     
     model.train()
-    inner_opt = torch.optim.SGD(model.transformer.h[-3:].parameters(), lr=lr)
+    opt = torch.optim.Adam(model.parameters(), lr=1e-5)
     model.to(device)
     
     global_iter = 0
@@ -48,6 +48,7 @@ def editableTrainLoop(
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
             edit_labels = edit_tokens.masked_fill(edit_mask == 0, -100) 
             
+            inner_opt = torch.optim.SGD(model.transformer.h[-3:].parameters(), lr=lr)
             with higher.innerloop_ctx(
                 model, 
                 inner_opt, 
@@ -64,28 +65,39 @@ def editableTrainLoop(
                     ).loss
                     diffopt.step(loss)
 
-                base_out = model(
-                    lm_tokens, 
-                    attention_mask=lm_mask,
-                    labels=lm_labels
-                )
-                l_base = base_out.loss
                 
                 edit_out = fmodel(
                     edit_tokens, 
                     attention_mask=edit_mask,
                     labels=edit_labels
                 )
-                l_edit = edit_out.loss
+                l_edit = cedit * edit_out.loss
+                l_edit.backward() #TODO: does this make a memory difference
+                
+                base_out = model(
+                    lm_tokens, 
+                    attention_mask=lm_mask,
+                    labels=lm_labels
+                )
+                l_base = base_out.loss
+
+                edited_base_out = fmodel(
+                    lm_tokens, 
+                    attention_mask=lm_mask,
+                    labels=lm_labels
+                )
                 l_loc = F.kl_div(
-                    edit_out.logits,
+                    edited_base_out.logits,
                     base_out.logits,
                     reduction='batchmean',
                     log_target=True
                 )
                 
-                total_loss = l_base + cedit * l_edit + cloc * l_loc
+                total_loss = l_base + cloc * l_loc
                 total_loss.backward()
+                opt.step()
+                opt.zero_grad()
+                
                 global_iter += 1
                 
                 print((
