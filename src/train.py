@@ -112,7 +112,7 @@ def editableTrainLoop(
                 writer.add_scalar("Lloc", l_loc, global_iter)
                 writer.add_scalar("total_loss", total_loss, global_iter)
         
-            if (train_step > 0) & (train_step % 1000 == 0):
+            if (train_step > 0) & (train_step % 2000 == 0):
                 timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
                 torch.save(
                     model.state_dict(), 
@@ -136,14 +136,13 @@ if __name__ == "__main__":
         tokenizer, 
         bs=1, 
         dataset='train'
-        # max_obs=10
     )
     editableTrainLoop(
         model, 
         dataloader, 
         epochs=1,
         n_edit_steps=1, 
-        cedit=1, 
-        cloc=1, 
-        lr=1e-3
+        cedit=100, 
+        cloc=100, 
+        lr=5e-4
     )
