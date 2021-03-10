@@ -10,7 +10,13 @@ def loadOTSModel():
 
     return model, tokenizer
 
-def retrieveDataloader(tokenizer, bs=10, dataset='train', max_obs=float('inf')):
+def retrieveDataloader(
+    tokenizer, 
+    bs=10, 
+    dataset='train', 
+    max_obs=float('inf'),
+    shuffle=False
+    ):
 
     writtenFiles = (
         glob.glob("../data/permuted*") if dataset == 'train' 
@@ -24,7 +30,8 @@ def retrieveDataloader(tokenizer, bs=10, dataset='train', max_obs=float('inf')):
         dataset,
         batch_size=bs,
         num_workers=4,
-        pin_memory=True
+        pin_memory=True,
+        shuffle=shuffle
     )
 
     return dataloader
