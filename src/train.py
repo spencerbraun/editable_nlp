@@ -32,6 +32,13 @@ def editableTrainLoop(
     model.train()
     opt = torch.optim.Adam(model.parameters(), lr=1e-5)
     model.to(device)
+    writer.add_hparams(
+        {
+            'lr_inner': lr, 'lr_outer': opt.lr, 'cedit': cedit, 'cloc': cloc, 
+            'nedit_steps': n_edit_steps
+            },
+        {'hparam/accuracy': 10*i, 'hparam/loss': 10*i}
+        )
     
     global_iter = 0
     print("starting training")
@@ -49,11 +56,12 @@ def editableTrainLoop(
             edit_labels = edit_tokens.masked_fill(edit_mask == 0, -100) 
             
             inner_opt = torch.optim.SGD(model.transformer.h[-3:].parameters(), lr=lr)
+            # inner_opt = torch.optim.SGD(model.parameters(), lr=lr)
             with higher.innerloop_ctx(
                 model, 
                 inner_opt, 
                 copy_initial_weights=False, 
-                track_higher_grads=False
+                track_higher_grads=True
                 ) as (fmodel, diffopt):
                 
                 for edit_step in range(n_edit_steps):
@@ -85,14 +93,18 @@ def editableTrainLoop(
                     labels=lm_labels
                 )
 
-                kl_loss = nn.KLDivLoss(reduction = 'batchmean')
-                l_loc = kl_loss(
-                    F.log_softmax(edited_base_out.logits, dim=-1),
-                    F.softmax(base_out.logits, dim=-1)
-                )
-                
-                
-                total_loss = l_base + cedit * l_edit + cloc * l_loc
+                # kl_loss = nn.KLDivLoss(reduction = 'none', log_target=True)
+                # l_loc = kl_loss(
+                #     F.log_softmax(edited_base_out.logits, dim=-1),
+                #     F.log_softmax(base_out.logits, dim=-1)
+                # )
+
+                l_loc = -(
+                    F.softmax(base_out.logits.detach(), dim=-1) * 
+                    F.log_softmax(edited_base_out.logits, dim=-1)
+                    ).sum(dim=-1).mean()
+
+                total_loss = l_base + cloc * l_loc  + cedit * l_edit 
                 total_loss.backward()
 
                 # accumulate grads 
@@ -101,7 +113,7 @@ def editableTrainLoop(
                     opt.zero_grad()
                 
                 global_iter += 1
-                
+
                 print((
                     f"Epoch: {epoch}; TrainStep {train_step}; ",
                     f"L_edit {l_edit} L_base {l_base} L_loc {l_loc}; ",
@@ -143,6 +155,6 @@ if __name__ == "__main__":
         epochs=1,
         n_edit_steps=1, 
         cedit=100, 
-        cloc=100, 
-        lr=5e-4
+        cloc=0.1, 
+        lr=1e-4
     )

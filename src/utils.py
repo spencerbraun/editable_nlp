@@ -2,7 +2,6 @@ import glob
 import torch
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from data_process import TorchDataset
-from config import gptConfig
 
 def loadOTSModel():
     model = GPT2LMHeadModel.from_pretrained("distilgpt2")
