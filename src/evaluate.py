@@ -190,10 +190,10 @@ if __name__ == "__main__":
 
     model_ots, _ = loadOTSModel()
     model, tokenizer = loadTrainedModel(args.model_path)
-    if args.test:
+    if args.test_set:
         dataloader = retrieveDataloader(tokenizer, bs=1, dataset='test')
     else:
-        dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=1000)
+        dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=100)
     
 
     if args.ppl:
@@ -203,7 +203,7 @@ if __name__ == "__main__":
     
     if args.edit:
         success_pct, outcomes = evalSingleEdits(model, dataloader, args.model_path)
-        success_pct_ots, outcomes_ots = evalSingleEdits(model_ots, dataloader, "OTS")
+        # success_pct_ots, outcomes_ots = evalSingleEdits(model_ots, dataloader, "OTS")
         print(f"Success Pct Trained: {success_pct}")
         print(f"Success Pct OTS: {success_pct_ots}\n")
         
