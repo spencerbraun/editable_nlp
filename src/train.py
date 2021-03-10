@@ -43,6 +43,13 @@ def editableTrainLoop(
     }
     savepath = f"../models/hypers.{timestamp}"
     torch.save(hypers, savepath)
+    writer.add_hparams(
+        {
+            'lr_inner': lr, 'lr_outer': 1e-5, 'cedit': cedit, 'cloc': cloc, 
+            'nedit_steps': n_edit_steps
+            },
+        {'placeholder': 0}
+        )
     
     model.to(device)
     global_iter = 0

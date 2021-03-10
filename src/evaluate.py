@@ -111,6 +111,7 @@ def evalSingleEdits(model, dataloader, model_name):
     model.to(DEVICE)
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
     filename = f"edit_success_{timestamp}_{os.path.basename(model_name)}"
+    n_edits = 0 
     with open(f"../eval/{filename}", "w") as f:
         f.write((
             "train_step,success,success_diff,"
@@ -171,6 +172,10 @@ def evalSingleEdits(model, dataloader, model_name):
             form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
             writeStr = ",".join([form(x) for x in run])
             f.write(f"{writeStr}\n")
+
+            n_edits +=1 
+            if n_edits >= 50:
+                break
         
     success_pct = sum([x[1] for x in outcomes]) / len(outcomes)
     return success_pct, outcomes
@@ -180,21 +185,23 @@ if __name__ == "__main__":
     parser.add_argument('--model_path', help='')
     parser.add_argument('--ppl', action='store_true')
     parser.add_argument('--edit', action='store_true')
+    parser.add_argument('--test_set', action='store_true')
     args = parser.parse_args()
 
     model_ots, _ = loadOTSModel()
     model, tokenizer = loadTrainedModel(args.model_path)
-    
+    if args.test:
+        dataloader = retrieveDataloader(tokenizer, bs=1, dataset='test')
+    else:
+        dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=1000)
     
 
     if args.ppl:
-        dataloader = retrieveDataloader(tokenizer, bs=15, dataset='valid', max_obs=50)
         ppl = runPPL(model_ots, dataloader, tokenizer, modelpath="ots")
         # ppl = runPPL(model, dataloader, tokenizer, modelpath=args.model_path)
         print(ppl)
     
     if args.edit:
-        dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=50)
         success_pct, outcomes = evalSingleEdits(model, dataloader, args.model_path)
         success_pct_ots, outcomes_ots = evalSingleEdits(model_ots, dataloader, "OTS")
         print(f"Success Pct Trained: {success_pct}")

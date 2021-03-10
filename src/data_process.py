@@ -191,6 +191,8 @@ class TorchDataset(torch.utils.data.Dataset):
             path = "../data"
         elif self.dataset == 'valid':
             path = "../data/valid"
+        elif self.dataset == 'test':
+            path = "../data/test"
 
         with open(f"{path}/original_entities.{ID}") as raw:
             raw_sample = raw.read()
@@ -263,4 +265,12 @@ if __name__ == "__main__":
             set='validation', 
             pct='100'
             )
-    
+            
+    if args.test:
+        print("generating test set")
+        generateDataset(
+            '../data/test', 
+            sample=int(1e6), 
+            set='test', 
+            pct='100'
+            )
