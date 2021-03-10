@@ -93,16 +93,18 @@ def editableTrainLoop(
                     labels=lm_labels
                 )
 
-                # kl_loss = nn.KLDivLoss(reduction = 'none', log_target=True)
+                # kl_loss = nn.KLDivLoss(reduction = 'batchmean', log_target=True)
                 # l_loc = kl_loss(
                 #     F.log_softmax(edited_base_out.logits, dim=-1),
-                #     F.log_softmax(base_out.logits, dim=-1)
+                #     F.log_softmax(base_out.logits.detach(), dim=-1)
                 # )
 
-                l_loc = -(
-                    F.softmax(base_out.logits.detach(), dim=-1) * 
-                    F.log_softmax(edited_base_out.logits, dim=-1)
-                    ).sum(dim=-1).mean()
+                l_loc =  (
+                    F.softmax(base_out.logits.detach(), dim=-1) *
+                    (
+                        F.log_softmax(base_out.logits.detach(), dim=-1) - 
+                        F.log_softmax(edited_base_out.logits, dim=-1)
+                    )).sum(-1).mean()
 
                 total_loss = l_base + cloc * l_loc  + cedit * l_edit 
                 total_loss.backward()
