@@ -48,7 +48,7 @@ def editableTrainLoop(
             'lr_inner': lr, 'lr_outer': 1e-5, 'cedit': cedit, 'cloc': cloc, 
             'nedit_steps': n_edit_steps
             },
-        {'placeholder': 0}
+        {'hparams': 0}
         )
     
     model.to(device)
@@ -67,7 +67,6 @@ def editableTrainLoop(
             
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
             edit_labels = edit_tokens.masked_fill(edit_mask == 0, -100) 
-            
             inner_opt = torch.optim.SGD(model.transformer.h[-3:].parameters(), lr=lr)
             # inner_opt = torch.optim.SGD(model.parameters(), lr=lr)
             with higher.innerloop_ctx(
@@ -133,26 +132,25 @@ def editableTrainLoop(
                 writer.add_scalar("Ledit", l_edit, global_iter)
                 writer.add_scalar("Lloc", l_loc, global_iter)
                 writer.add_scalar("total_loss", total_loss, global_iter)
-        
-            if (train_step > 0) & (train_step % 2000 == 0):
-                torch.save(
-                    model.state_dict(), 
-                    f"../models/model_epoch{epoch}_ts{train_step}.{timestamp}"
-                    )
+            
+
+            if (train_step > 0) & (train_step % 1000 == 0):
                 valid_iter = validateEditTraining(
                     model, 
                     validation_set, 
                     writer, 
                     valid_iter
                     )
-                
+            if (train_step > 0) & (train_step % 2000 == 0):
+                torch.save(
+                    model.state_dict(), 
+                    f"../models/model_epoch{epoch}_ts{train_step}.{timestamp}"
+                    )  
             if (train_step > 0) & (train_step % 5000 == 0):
                 torch.save(
                     fmodel.state_dict(), 
                     f"../models/fmodel_epoch{epoch}_ts{train_step}.{timestamp}"
-                    )
-
-                
+                    ) 
 
     torch.save(model.state_dict(), f"../models/model_epoch_FINAL.{timestamp}")
     writer.flush()
@@ -248,7 +246,7 @@ def validateEditTraining(model, validation_set, writer, start=0):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--editable', help='')
+    parser.add_argument('--editable', action='store_true')
     parser.add_argument('--finetune', action='store_true')
     args = parser.parse_args()
 
@@ -263,7 +261,7 @@ if __name__ == "__main__":
         tokenizer, 
         bs=15, 
         dataset='valid',
-        maxobs=100,
+        max_obs=1000,
         shuffle=True
     )
     
@@ -274,8 +272,8 @@ if __name__ == "__main__":
             validation_set,
             epochs=1,
             n_edit_steps=1, 
-            cedit=1, 
-            cloc=1, 
+            cedit=100, 
+            cloc=100, 
             lr=1e-3
         )
     
