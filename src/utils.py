@@ -1,4 +1,5 @@
 import glob
+import numpy as np
 import torch
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from data_process import TorchDataset
@@ -43,3 +44,11 @@ def loadTrainedModel(modelPath):
     model.eval()
 
     return model, tokenizer
+
+def locateEntityEdit(edit_tokens, ent_tokens):
+    return np.argwhere(
+        np.in1d(
+            edit_tokens.numpy(), 
+            ent_tokens.numpy()
+            )
+        ).flatten()

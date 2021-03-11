@@ -1,3 +1,4 @@
+import os
 import argparse
 import glob
 import time
@@ -11,7 +12,7 @@ import torch.nn.functional as F
 import higher
 from torch.utils.tensorboard import SummaryWriter
 
-from utils import loadOTSModel, retrieveDataloader
+from utils import loadOTSModel, retrieveDataloader, locateEntityEdit
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -27,13 +28,12 @@ def editableTrainLoop(
     lr=0.01
     ):
 
+    
     writer = SummaryWriter()
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
-    total_epochs = epochs
-    
-    model.train()
-    opt = torch.optim.Adam(model.parameters(), lr=1e-5)
-    
+    errpath  = f"errors/errors_{timestamp}"
+    os.mkdir(errpath)
+    savepath = f"../models/hypers.{timestamp}"
     hypers = {
         'inner_lr': lr,
         'outer_lr': 1e-5,
@@ -41,7 +41,7 @@ def editableTrainLoop(
         'cedit': cedit,
         'cloc': cloc
     }
-    savepath = f"../models/hypers.{timestamp}"
+    
     torch.save(hypers, savepath)
     writer.add_hparams(
         {
@@ -51,22 +51,40 @@ def editableTrainLoop(
         {'hparams': 0}
         )
     
+    
+    total_epochs = epochs
+    model.train()
     model.to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=1e-5)
+    
     global_iter = 0
     valid_iter = 0
     print("starting training")
 
     for epoch in range(total_epochs):
         
-        for train_step, (lm_data, edit_example, _) in enumerate(dataloader):
+        for train_step, (lm_data, edit_example, ent) in enumerate(dataloader):
             
             lm_tokens, lm_mask = lm_data
             lm_tokens, lm_mask = lm_tokens.to(device), lm_mask.to(device)
-            edit_tokens, edit_mask = edit_example
-            edit_tokens, edit_mask = edit_tokens.to(device), edit_mask.to(device)
-            
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
-            edit_labels = edit_tokens.masked_fill(edit_mask == 0, -100) 
+
+            edit_tokens, edit_mask = edit_example
+            
+            ent_tokens = ent[0].flatten()
+            ent_tokens = ent_tokens[ent_tokens != 50256]
+            edit_locs = locateEntityEdit(edit_tokens, ent_tokens)
+            if edit_locs.size == 0:
+                print(f"Unable to locate edit on TS {train_step}")
+                torch.save(edit_tokens, f"{errpath}/edit_tokens_{train_step}")
+                torch.save(ent_tokens, f"{errpath}/ent_tokens_{train_step}")            
+            
+            edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
+            edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
+            edit_labels = edit_labels.to(device)
+            edit_tokens, edit_mask = edit_tokens.to(device), edit_mask.to(device)
+
+
             inner_opt = torch.optim.SGD(model.transformer.h[-3:].parameters(), lr=lr)
             # inner_opt = torch.optim.SGD(model.parameters(), lr=lr)
             with higher.innerloop_ctx(

@@ -10,7 +10,7 @@ import torch.nn.functional as F
 import higher
 
 from data_process import TorchDataset
-from utils import loadTrainedModel, retrieveDataloader, loadOTSModel
+from utils import loadTrainedModel, retrieveDataloader, loadOTSModel, locateEntityEdit
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -67,7 +67,7 @@ def performOneEdit(
         model, 
         inner_opt, 
         copy_initial_weights=False, 
-        track_higher_grads=False
+        track_higher_grads=True
         ) as (fmodel, diffopt):
         
         for edit_step in range(n_edit_steps):
@@ -87,7 +87,7 @@ def performOneEdit(
     
     return model_
 
-def getIndexedProbs(model, index, gold_token, sent_tokens, mask, labels):
+def getIndexedProbs(model, index, gold_tokens, sent_tokens, mask, labels):
        
     model.eval()
     with torch.no_grad():
@@ -96,13 +96,15 @@ def getIndexedProbs(model, index, gold_token, sent_tokens, mask, labels):
             attention_mask=mask,
             labels=labels
         )
+        logits = output.logits[:,index,:].detach().cpu().squeeze(0) #squeeze batch size
         probs = (
             output.logits[:,index,:]
-            .softmax(dim=-1).detach().cpu().squeeze()
+            .softmax(dim=-1).detach().cpu().squeeze(0)
             )
-        rank = torch.sum(probs > probs[gold_token]) 
+        # rank = torch.sum(probs > probs[gold_token]) 
+        logit_sum = torch.sum(logits.gather(1, gold_tokens.unsqueeze(1)))
 
-    return rank
+    return logit_sum, probs
 
 def evalSingleEdits(model, dataloader, model_name):
     
@@ -119,30 +121,26 @@ def evalSingleEdits(model, dataloader, model_name):
             ))
         for train_step, (lm_data, edit_example, ent) in enumerate(dataloader):
             edit_tokens, edit_mask = edit_example
-            ent_tokens = ent[0].squeeze()
-            ent_tokens = ent_tokens[ent_tokens != 50256].squeeze()
-            
+            ent_tokens = ent[0].flatten() #1d array of vocab indexes
+            ent_tokens = ent_tokens[ent_tokens != 50256]
+    
             try:
-                edit_start_loc = np.min(np.argwhere(
-                    np.in1d(
-                        edit_tokens.numpy(), 
-                        ent_tokens.numpy()
-                        )
-                    ).squeeze())
+                edit_locs = locateEntityEdit(edit_tokens, ent_tokens)
             except:
+                print(f"Error on step {train_step}, continuing")
                 continue
 
             edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
             edit_labels = edit_tokens.masked_fill(edit_mask == 0, -100) 
             edit_labels.to(DEVICE)
             
-            gold_token = ent_tokens.cpu()
-            gold_token = gold_token.item() if not gold_token.size() else gold_token[0].item()
-
-            orig_rank = getIndexedProbs(
+            gold_tokens = ent_tokens.cpu()
+            # gold_token = gold_token.item() if not gold_token.size() else gold_token[0].item()
+            
+            orig_logits, _ = getIndexedProbs(
                 model, 
-                edit_start_loc, 
-                gold_token, 
+                edit_locs, 
+                gold_tokens, 
                 edit_tokens, 
                 edit_mask, 
                 edit_labels
@@ -151,22 +149,22 @@ def evalSingleEdits(model, dataloader, model_name):
 
             model_out = performOneEdit(model, edit_example)
                     
-            new_rank = getIndexedProbs(
+            new_logits, _ = getIndexedProbs(
                 model_out, 
-                edit_start_loc, 
-                gold_token, 
+                edit_locs, 
+                gold_tokens, 
                 edit_tokens, 
                 edit_mask, 
                 edit_labels
                 )
             new_ppl = perplexity(model_out, dataloader)
 
-            success = new_rank < orig_rank
-            success_diff = orig_rank - new_rank
+            success = new_logits < orig_logits
+            success_diff = orig_logits - new_logits
 
             run = (
                 train_step, success, success_diff, 
-                new_rank, new_ppl, orig_rank, orig_ppl
+                new_logits, new_ppl, orig_logits, orig_ppl
                 )
             outcomes.append(run)
             form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
@@ -183,27 +181,26 @@ def evalSingleEdits(model, dataloader, model_name):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path', help='')
-    parser.add_argument('--ppl', action='store_true')
+    parser.add_argument('--ots', action='store_true')
     parser.add_argument('--edit', action='store_true')
     parser.add_argument('--test_set', action='store_true')
     args = parser.parse_args()
 
-    model_ots, _ = loadOTSModel()
+    
     model, tokenizer = loadTrainedModel(args.model_path)
     if args.test_set:
         dataloader = retrieveDataloader(tokenizer, bs=1, dataset='test')
     else:
         dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=100)
     
-
-    if args.ppl:
-        ppl = runPPL(model_ots, dataloader, tokenizer, modelpath="ots")
-        # ppl = runPPL(model, dataloader, tokenizer, modelpath=args.model_path)
-        print(ppl)
     
     if args.edit:
         success_pct, outcomes = evalSingleEdits(model, dataloader, args.model_path)
-        # success_pct_ots, outcomes_ots = evalSingleEdits(model_ots, dataloader, "OTS")
+        
         print(f"Success Pct Trained: {success_pct}")
+
+    if args.ots:
+        model_ots, _ = loadOTSModel()
+        # success_pct_ots, outcomes_ots = evalSingleEdits(model_ots, dataloader, "OTS")
         print(f"Success Pct OTS: {success_pct_ots}\n")
         
