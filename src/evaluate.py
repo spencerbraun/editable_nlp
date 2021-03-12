@@ -49,15 +49,16 @@ def runPPL(model, dataloader, modelpath="None"):
 def performOneEdit(
     model, 
     edit_example,
-    n_edit_steps = 5, 
-    cedit=0.1, 
-    cloc=0.1, 
-    lr=0.01
+    edit_locs,
+    n_edit_steps = 5,
+    lr=1e-3
     ):
     
     edit_tokens, edit_mask = edit_example
-    edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
-    edit_labels = edit_tokens.masked_fill(edit_mask == 0, -100) 
+    edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
+    edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
+    edit_labels = edit_labels.to(device)
+    edit_tokens, edit_mask = edit_tokens.to(device), edit_mask.to(device)
     
     model.train()
     model_ = copy.deepcopy(model)
@@ -147,7 +148,13 @@ def evalSingleEdits(model, dataloader, model_name):
                 )
             orig_ppl = perplexity(model, dataloader)
 
-            model_out = performOneEdit(model, edit_example)
+            model_out = performOneEdit(
+                model, 
+                edit_example, 
+                ent_tokens,
+                n_edit_steps=1, 
+                lr=1e-3
+                )
                     
             new_logits, _ = getIndexedProbs(
                 model_out, 
