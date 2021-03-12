@@ -5,6 +5,8 @@ import random
 import time
 from operator import itemgetter
 
+import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -202,7 +204,7 @@ class TorchDataset(torch.utils.data.Dataset):
             ent_sample = ent.read()
             new_ent = ent_sample.strip().split('|')[-1]
 
-        raw, perm = self.tokenize([raw_sample, permuted_sample])
+        raw, perm = self.tokenize([" "+raw_sample, " "+permuted_sample])
         ent = self.tokenize([" "+new_ent], ent=True)
 
         return raw, perm, ent

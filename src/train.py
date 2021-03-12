@@ -77,14 +77,14 @@ def editableTrainLoop(
             if edit_locs.size == 0:
                 print(f"Unable to locate edit on TS {train_step}")
                 torch.save(edit_tokens, f"{errpath}/edit_tokens_{train_step}")
-                torch.save(ent_tokens, f"{errpath}/ent_tokens_{train_step}")            
+                torch.save(ent_tokens, f"{errpath}/ent_tokens_{train_step}")
+                continue
             
             edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
             edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
             edit_labels = edit_labels.to(device)
             edit_tokens, edit_mask = edit_tokens.to(device), edit_mask.to(device)
-
-
+            import ipdb; ipdb.set_trace()
             inner_opt = torch.optim.SGD(model.transformer.h[-3:].parameters(), lr=lr)
             # inner_opt = torch.optim.SGD(model.parameters(), lr=lr)
             with higher.innerloop_ctx(
@@ -290,8 +290,8 @@ if __name__ == "__main__":
             validation_set,
             epochs=1,
             n_edit_steps=1, 
-            cedit=100, 
-            cloc=100, 
+            cedit=1, 
+            cloc=1, 
             lr=1e-3
         )
     
