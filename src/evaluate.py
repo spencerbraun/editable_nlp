@@ -57,8 +57,8 @@ def performOneEdit(
     edit_tokens, edit_mask = edit_example
     edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
     edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
-    edit_labels = edit_labels.to(device)
-    edit_tokens, edit_mask = edit_tokens.to(device), edit_mask.to(device)
+    edit_labels = edit_labels.to(DEVICE)
+    edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
     
     model.train()
     model_ = copy.deepcopy(model)
@@ -107,7 +107,7 @@ def getIndexedProbs(model, index, gold_tokens, sent_tokens, mask, labels):
 
     return logit_sum, probs
 
-def evalSingleEdits(model, dataloader, model_name):
+def evalSingleEdits(model, dataloader, model_name, n_edit_steps):
     
     outcomes = []
     
@@ -117,7 +117,7 @@ def evalSingleEdits(model, dataloader, model_name):
     n_edits = 0 
     with open(f"../eval/{filename}", "w") as f:
         f.write((
-            "train_step,success,success_diff,"
+            "train_step,n_edit_steps,success,success_diff,"
             "new_rank,new_ppl,orig_rank,orig_ppl\n"
             ))
         for train_step, (lm_data, edit_example, ent) in enumerate(dataloader):
@@ -151,8 +151,8 @@ def evalSingleEdits(model, dataloader, model_name):
             model_out = performOneEdit(
                 model, 
                 edit_example, 
-                ent_tokens,
-                n_edit_steps=1, 
+                edit_locs,
+                n_edit_steps=n_edit_steps, 
                 lr=1e-3
                 )
                     
@@ -170,7 +170,7 @@ def evalSingleEdits(model, dataloader, model_name):
             success_diff = orig_logits - new_logits
 
             run = (
-                train_step, success, success_diff, 
+                train_step, n_edit_steps, success, success_diff, 
                 new_logits, new_ppl, orig_logits, orig_ppl
                 )
             outcomes.append(run)
@@ -191,6 +191,7 @@ if __name__ == "__main__":
     parser.add_argument('--ots', action='store_true')
     parser.add_argument('--edit', action='store_true')
     parser.add_argument('--test_set', action='store_true')
+    parser.add_argument('--edit_steps', default=1)
     args = parser.parse_args()
 
     
@@ -202,7 +203,12 @@ if __name__ == "__main__":
     
     
     if args.edit:
-        success_pct, outcomes = evalSingleEdits(model, dataloader, args.model_path)
+        success_pct, outcomes = evalSingleEdits(
+            model, 
+            dataloader, 
+            args.model_path, 
+            int(args.edit_steps)
+            )
         
         print(f"Success Pct Trained: {success_pct}")
 
