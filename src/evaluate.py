@@ -78,7 +78,7 @@ def performOneEdit(
                 attention_mask=edit_mask,
                 labels=edit_labels
             ).loss
-            if loss < 1:
+            if loss < 1 and edit_step > 0:
                 break
             diffopt.step(loss)
 
