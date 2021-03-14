@@ -291,7 +291,7 @@ if __name__ == "__main__":
             epochs=1,
             n_edit_steps=1, 
             cedit=1, 
-            cloc=1, 
+            cloc=10, 
             lr=1e-3
         )
     

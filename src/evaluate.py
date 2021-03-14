@@ -78,6 +78,8 @@ def performOneEdit(
                 attention_mask=edit_mask,
                 labels=edit_labels
             ).loss
+            if loss < 1:
+                break
             diffopt.step(loss)
 
             print(f"Edit step {edit_step}; loss {loss} ") 
@@ -104,8 +106,8 @@ def getIndexedProbs(model, index, gold_tokens, sent_tokens, mask, labels):
             )
         # rank = torch.sum(probs > probs[gold_token]) 
         logit_sum = torch.sum(logits.gather(1, gold_tokens.unsqueeze(1)))
-
-    return logit_sum, probs
+        probs_avg = torch.mean(probs.gather(1, gold_tokens.unsqueeze(1)))
+    return logit_sum, probs_avg
 
 def evalSingleEdits(model, dataloader, model_name, n_edit_steps):
     
@@ -118,7 +120,7 @@ def evalSingleEdits(model, dataloader, model_name, n_edit_steps):
     with open(f"../eval/{filename}", "w") as f:
         f.write((
             "train_step,n_edit_steps,success,success_diff,"
-            "new_rank,new_ppl,orig_rank,orig_ppl\n"
+            "new_logits,orig_logits,new_ppl,orig_ppl,new_prob,old_prob\n"
             ))
         for train_step, (lm_data, edit_example, ent) in enumerate(dataloader):
             edit_tokens, edit_mask = edit_example
@@ -138,7 +140,7 @@ def evalSingleEdits(model, dataloader, model_name, n_edit_steps):
             gold_tokens = ent_tokens.cpu()
             # gold_token = gold_token.item() if not gold_token.size() else gold_token[0].item()
             
-            orig_logits, _ = getIndexedProbs(
+            orig_logits, orig_prob = getIndexedProbs(
                 model, 
                 edit_locs, 
                 gold_tokens, 
@@ -156,7 +158,7 @@ def evalSingleEdits(model, dataloader, model_name, n_edit_steps):
                 lr=1e-3
                 )
                     
-            new_logits, _ = getIndexedProbs(
+            new_logits, new_prob = getIndexedProbs(
                 model_out, 
                 edit_locs, 
                 gold_tokens, 
@@ -166,12 +168,12 @@ def evalSingleEdits(model, dataloader, model_name, n_edit_steps):
                 )
             new_ppl = perplexity(model_out, dataloader)
 
-            success = new_logits < orig_logits
+            success = new_logits > orig_logits
             success_diff = orig_logits - new_logits
 
             run = (
                 train_step, n_edit_steps, success, success_diff, 
-                new_logits, new_ppl, orig_logits, orig_ppl
+                new_logits, orig_logits, new_ppl, orig_ppl, new_prob, orig_prob
                 )
             outcomes.append(run)
             form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
@@ -194,8 +196,10 @@ if __name__ == "__main__":
     parser.add_argument('--edit_steps', default=1)
     args = parser.parse_args()
 
-    
-    model, tokenizer = loadTrainedModel(args.model_path)
+    if args.model_path: 
+        model, tokenizer = loadTrainedModel(args.model_path)
+    else:
+        model_ots, tokenizer = loadOTSModel()
     if args.test_set:
         dataloader = retrieveDataloader(tokenizer, bs=1, dataset='test')
     else:
@@ -213,7 +217,11 @@ if __name__ == "__main__":
         print(f"Success Pct Trained: {success_pct}")
 
     if args.ots:
-        model_ots, _ = loadOTSModel()
-        # success_pct_ots, outcomes_ots = evalSingleEdits(model_ots, dataloader, "OTS")
+        success_pct_ots, outcomes = evalSingleEdits(
+            model_ots, 
+            dataloader, 
+            "OTS", 
+            int(args.edit_steps)
+            )
         print(f"Success Pct OTS: {success_pct_ots}\n")
         
