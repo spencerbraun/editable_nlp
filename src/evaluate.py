@@ -191,7 +191,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path', help='')
     parser.add_argument('--ots', action='store_true')
-    parser.add_argument('--edit', action='store_true')
     parser.add_argument('--test_set', action='store_true')
     parser.add_argument('--edit_steps', default=1)
     args = parser.parse_args()
@@ -206,7 +205,7 @@ if __name__ == "__main__":
         dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=100)
     
     
-    if args.edit:
+    if args.model_path:
         success_pct, outcomes = evalSingleEdits(
             model, 
             dataloader, 
