@@ -21,7 +21,8 @@ def retrieveDataloader(
 
     writtenFiles = (
         glob.glob("../data/permuted*") if dataset == 'train' 
-        else glob.glob("../data/valid/original*")
+        else glob.glob("../data/valid/original*") if dataset == 'valid' 
+        else glob.glob("../data/test/original*")
         )
 
     fileIndex = max(map(lambda x: int(x.split(".")[-1]), writtenFiles))

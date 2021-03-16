@@ -117,7 +117,7 @@ def evalSingleEdits(model, dataloader, model_name, n_edit_steps):
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
     filename = f"edit_success_{timestamp}_{os.path.basename(model_name)}"
     n_edits = 0 
-    with open(f"../eval/{filename}", "w") as f:
+    with open(f"../eval/test/{filename}", "w") as f:
         f.write((
             "train_step,n_edit_steps,success,success_diff,"
             "new_logits,orig_logits,new_ppl,orig_ppl,new_prob,old_prob\n"

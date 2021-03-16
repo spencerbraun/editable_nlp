@@ -251,7 +251,9 @@ if __name__ == "__main__":
     parser.add_argument('--train', action='store_true', default=False,
                         help='')
     parser.add_argument('--valid', action='store_true', default=False,
-                        help='')                        
+                        help='')  
+    parser.add_argument('--test', action='store_true', default=False,
+    help='')                        
 
     args = parser.parse_args()
 
