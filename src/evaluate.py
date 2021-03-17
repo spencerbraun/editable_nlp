@@ -109,15 +109,16 @@ def getIndexedProbs(model, index, gold_tokens, sent_tokens, mask, labels):
         probs_avg = torch.mean(probs.gather(1, gold_tokens.unsqueeze(1)))
     return logit_sum, probs_avg
 
-def evalSingleEdits(model, dataloader, model_name, n_edit_steps):
+def evalSingleEdits(model, dataloader, model_name, n_edit_steps, testset=False):
     
     outcomes = []
     
     model.to(DEVICE)
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
     filename = f"edit_success_{timestamp}_{os.path.basename(model_name)}"
-    n_edits = 0 
-    with open(f"../eval/test/{filename}", "w") as f:
+    n_edits = 0
+    saveloc = f"../eval/{filename}" if not testset else f"../eval/test/{filename}" 
+    with open(saveloc, "w") as f:
         f.write((
             "train_step,n_edit_steps,success,success_diff,"
             "new_logits,orig_logits,new_ppl,orig_ppl,new_prob,old_prob\n"
@@ -181,7 +182,7 @@ def evalSingleEdits(model, dataloader, model_name, n_edit_steps):
             f.write(f"{writeStr}\n")
 
             n_edits +=1 
-            if n_edits >= 200:
+            if n_edits >= 100:
                 break
         
     success_pct = sum([x[1] for x in outcomes]) / len(outcomes)
@@ -200,17 +201,17 @@ if __name__ == "__main__":
     else:
         model_ots, tokenizer = loadOTSModel()
     if args.test_set:
-        dataloader = retrieveDataloader(tokenizer, bs=1, dataset='test')
+        dataloader = retrieveDataloader(tokenizer, bs=1, dataset='test', max_obs=200)
     else:
         dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=100)
-    
     
     if args.model_path:
         success_pct, outcomes = evalSingleEdits(
             model, 
             dataloader, 
             args.model_path, 
-            int(args.edit_steps)
+            int(args.edit_steps),
+            testset=args.test_set
             )
         
         print(f"Success Pct Trained: {success_pct}")
@@ -220,7 +221,8 @@ if __name__ == "__main__":
             model_ots, 
             dataloader, 
             "OTS", 
-            int(args.edit_steps)
+            int(args.edit_steps),
+            testset=args.test_set
             )
         print(f"Success Pct OTS: {success_pct_ots}\n")
         
