@@ -181,7 +181,7 @@ def evalSingleEdits(model, dataloader, model_name, n_edit_steps):
             f.write(f"{writeStr}\n")
 
             n_edits +=1 
-            if n_edits >= 50:
+            if n_edits >= 200:
                 break
         
     success_pct = sum([x[1] for x in outcomes]) / len(outcomes)
