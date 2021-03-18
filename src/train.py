@@ -290,8 +290,8 @@ if __name__ == "__main__":
             validation_set,
             epochs=1,
             n_edit_steps=1, 
-            cedit=1, 
-            cloc=10, 
+            cedit=0.1, 
+            cloc=0.1, 
             lr=1e-3
         )
     
