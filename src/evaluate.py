@@ -84,8 +84,6 @@ def performOneEdit(
 
             print(f"Edit step {edit_step}; loss {loss} ") 
         
-        # for p_, fp in zip(model_.parameters(), fmodel.parameters()):
-        #     p_[:] = fp[:]
         model_.load_state_dict(fmodel.state_dict())
     
     return model_
