@@ -51,7 +51,7 @@ class BaseTrainer:
 
     def echo(self, train_step, **kwargs):
         print((
-                f"Epoch: {self.epoch}; TrainStep {train_step}; ".
+                f"Epoch: {self.epoch}; TrainStep {train_step}; ",
                 f"; ".join([f"{key} {val}" for key,val in kwargs.items()])
             )) 
 
@@ -60,7 +60,7 @@ class BaseTrainer:
 
     def run(self):
 
-        if not self.debug:
+        if not self.config.debug:
             torch.save(self.config, self.hyperspath)
 
         self.model.train()
@@ -95,22 +95,22 @@ class BaseTrainer:
                     opt.zero_grad()
                 
                 global_iter += 1
-                self.echo(train_step, l_base)
+                self.echo(train_step, {"l_base": l_base})
                 if not self.config.debug:
                     self.tensorBoard(global_iter, l_base)
-                    self.saveModel(model, train_step)
+                    self.saveModel(self.model, train_step)
 
         if not self.config.debug:
-            self.saveModel(model, train_step)
+            self.saveModel(self.model, train_step)
         self.writer.flush()
 
 
 
 class EditTrainer(BaseTrainer):
     def __init__(self, config, dataloader, model_path=None):
-         super().__init__(config, dataloader, model_path=None) 
-         self.validation_set = retrieveDataloader(
-            tokenizer, 
+        super().__init__(config, dataloader, model_path=None) 
+        self.validation_set = utils.retrieveDataloader(
+            self.tokenizer, 
             bs=15, 
             dataset='valid',
             max_obs=1000,
@@ -144,7 +144,7 @@ class EditTrainer(BaseTrainer):
     
     def run(self):
 
-        if not self.debug:
+        if not self.config.debug:
             torch.save(self.config, self.hyperspath)
 
         self.model.train()
@@ -160,7 +160,7 @@ class EditTrainer(BaseTrainer):
         for epoch in range(self.config.epochs):
             self.epoch = epoch
             
-            for train_step, (lm_data, edit_example, ent) in enumerate(dataloader):
+            for train_step, (lm_data, edit_example, ent) in enumerate(self.data):
             
                 lm_tokens, lm_mask = lm_data
                 lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
@@ -183,18 +183,18 @@ class EditTrainer(BaseTrainer):
                 edit_tokens, edit_mask = edit_tokens.to(self.device), edit_mask.to(self.device)
                 
                 inner_opt = torch.optim.SGD(
-                    model.transformer.h[-3:].parameters(), 
+                    self.model.transformer.h[-3:].parameters(), 
                     lr=self.config.inner_lr
                     )
 
                 with higher.innerloop_ctx(
-                    model, 
+                    self.model, 
                     inner_opt, 
                     copy_initial_weights=False, 
                     track_higher_grads=True
                     ) as (fmodel, diffopt):
                     
-                    for edit_step in range(n_edit_steps):
+                    for edit_step in range(self.config.n_edit_steps):
 
                         loss = fmodel(
                             edit_tokens, 
@@ -210,7 +210,7 @@ class EditTrainer(BaseTrainer):
                     )
                     l_edit = edit_out.loss
                     
-                    base_out = model(
+                    base_out = self.model(
                         lm_tokens, 
                         attention_mask=lm_mask,
                         labels=lm_labels
@@ -230,7 +230,11 @@ class EditTrainer(BaseTrainer):
                             F.log_softmax(edited_base_out.logits, dim=-1)
                         )).sum(-1).mean()
                     
-                    total_loss = l_base + cloc * l_loc  + cedit * l_edit 
+                    total_loss = (
+                        l_base + 
+                        self.config.cloc * l_loc  + 
+                        self.config.cedit * l_edit
+                        )
                     total_loss.backward()
 
                     # accumulate grads 
@@ -239,16 +243,21 @@ class EditTrainer(BaseTrainer):
                         opt.zero_grad()
                     
                     global_iter += 1
-
-                    self.echo(train_step, l_base, l_edit, l_loc, total_loss)
+                    
+                    loss_dict = {
+                        "l_base": l_base, "l_edit": l_edit, 
+                        "l_loc": l_loc, "total": total_loss
+                        }
+                    self.echo(train_step, **loss_dict)
                     if not self.config.debug:
                         self.tensorBoard(global_iter, l_base, l_edit, l_loc, total_loss)
-                        self.saveModel(model, train_step)
+                        self.saveModel(self.model, train_step)
 
-                if train_step % 1000 == 0:
-                    self.validateEditTraining()
+                        if train_step % 1000 == 0:
+                            self.validateEditTraining()
+
         if not self.config.debug:
-            self.saveModel(model, train_step)
+            self.saveModel(self.model, train_step)
         self.writer.flush()
 
 
@@ -259,17 +268,18 @@ if __name__ == "__main__":
     parser.add_argument('--finetune', action='store_true')
     args = parser.parse_args()
 
-    dataloader = retrieveDataloader(
+    _, tokenizer = utils.loadOTSModel()
+    dataloader = utils.retrieveDataloader(
         tokenizer, 
         bs=1, 
         dataset='train'
     )
 
     if args.editable:
-        trainer = EditTrainer(EditConfig, dataloader)
+        trainer = EditTrainer(EditConfig(), dataloader)
     
     elif args.finetune:
-        trainer = BaseTrainer(TrainConfig, dataloader)
+        trainer = BaseTrainer(TrainConfig(), dataloader)
     
     else:
         raise AttributeError("Must specify --editable or --finetune")
