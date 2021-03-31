@@ -38,15 +38,15 @@ class BaseTrainer:
 
         self.data = dataloader
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.writer = SummaryWriter()
+        self.writer = SummaryWriter() if not self.config.debug else None
         self.epoch = 0
 
-    def saveModel(self, model, train_step):
+    def saveModel(self, model, train_step, name="model"):
         
         if (train_step > 0) & (train_step % self.config.model_save_pt == 0):
             torch.save(
                 self.model.state_dict(), 
-                self.modelpath("gpt2", self.epoch, train_step)
+                self.modelpath(name, self.epoch, train_step)
                 )
 
     def echo(self, train_step, **kwargs):
@@ -55,8 +55,9 @@ class BaseTrainer:
                 f"; ".join([f"{key} {val}" for key,val in kwargs.items()])
             )) 
 
-    def tensorBoard(self, step, l_base):
-        self.writer.add_scalar("Lbase", l_base, step)
+    def tensorBoard(self, step, **kwargs):
+        for key, value in kwargs.items():
+            self.writer.add_scalar(key, value, step)
 
     def run(self):
 
@@ -95,10 +96,10 @@ class BaseTrainer:
                     opt.zero_grad()
                 
                 global_iter += 1
-                self.echo(train_step, {"l_base": l_base})
+                self.echo(train_step, **{"l_base": l_base})
                 if not self.config.debug:
-                    self.tensorBoard(global_iter, l_base)
-                    self.saveModel(self.model, train_step)
+                    self.tensorBoard(global_iter, **{"l_base": l_base})
+                    self.saveModel(self.model, train_step, "gpt2")
 
         if not self.config.debug:
             self.saveModel(self.model, train_step)
@@ -117,12 +118,6 @@ class EditTrainer(BaseTrainer):
             shuffle=True
         )
         self.val_iter = 0
-
-    def tensorBoard(self, step, l_base, l_edit, l_loc, total_loss):
-        self.writer.add_scalar("Lbase", l_base, step)
-        self.writer.add_scalar("Ledit", l_edit, step)
-        self.writer.add_scalar("Lloc", l_loc, step)
-        self.writer.add_scalar("total_loss", total_loss, step)
 
     def validateEditTraining(self):
         self.model.eval()
@@ -250,7 +245,7 @@ class EditTrainer(BaseTrainer):
                         }
                     self.echo(train_step, **loss_dict)
                     if not self.config.debug:
-                        self.tensorBoard(global_iter, l_base, l_edit, l_loc, total_loss)
+                        self.tensorBoard(global_iter, **loss_dict)
                         self.saveModel(self.model, train_step)
 
                         if train_step % 1000 == 0:

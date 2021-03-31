@@ -39,12 +39,13 @@ def retrieveDataloader(
     return dataloader
 
 
-def loadTrainedModel(modelPath):
-    model, tokenizer = loadOTSModel()
+def loadTrainedModel(modelPath, tokenizer=True):
+    model, tok = loadOTSModel()
     model.load_state_dict(torch.load(modelPath))
     model.eval()
-
-    return model, tokenizer
+    if not tokenizer:
+        return model
+    return model, tok
 
 def locateEntityEdit(edit_tokens, ent_tokens):
     return np.argwhere(
