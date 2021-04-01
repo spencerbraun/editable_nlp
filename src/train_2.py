@@ -256,19 +256,168 @@ class EditTrainer(BaseTrainer):
         self.writer.flush()
 
 
+class SelfSampleTrainer(EditTrainer):
+    def __init__(self, config, dataloader, model_path=None):
+        super().__init__(config, dataloader, model_path) 
+        
+        self.finetuned = utils.loadTrainedModel(
+            "../models/finetune/gpt2_epoch0_ts10000.20210310.18.03.1615401990", 
+            tokenizer=False
+        )
+        self.finetuned.to(self.device)
+        
+    def genModelText(self, lm_tokens, edit_locs):
+        
+
+        input_ids = lm_tokens[:, :edit_locs.min()]
+        input_size = input_ids.size()[-1]
+        
+        self.model.eval()
+        print("generating")
+        output_sequence = self.finetuned.generate(
+            input_ids=input_ids,
+            max_length=input_size + 15,
+            temperature=1.2,
+            repetition_penalty=1.0,
+            do_sample=True,
+            num_return_sequences=10,
+        )
+
+        edit_tokens = random.choice(output_sequence).unsqueeze(0)
+        edit_mask = torch.ones(edit_tokens.shape, dtype=torch.long)
+        edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
+        edit_labels[:, input_size:] = edit_tokens[:, input_size:]
+        edit_labels = edit_labels.to(self.device)
+        edit_tokens, edit_mask = edit_tokens.to(self.device), edit_mask.to(self.device)
+
+        return edit_tokens, edit_mask, edit_labels
+
+    
+    def run(self):
+
+        if not self.config.debug:
+            torch.save(self.config, self.hyperspath)
+
+        self.model.train()
+        self.model.to(self.device)
+        opt = torch.optim.Adam(
+            self.model.parameters(), 
+            self.config.outer_lr
+            )
+        
+        global_iter = 0
+        print("Starting Training")
+
+        for epoch in range(self.config.epochs):
+            self.epoch = epoch
+            
+            for train_step, (lm_data, edit_example, ent) in enumerate(self.data):
+            
+                lm_tokens, lm_mask = lm_data
+                lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
+                lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
+                
+                ent_tokens = ent[0].flatten()
+                ent_tokens = ent_tokens[ent_tokens != 50256]
+                edit_locs = utils.locateEntityEdit(edit_example[0], ent_tokens)
+                if edit_locs.size == 0 or edit_locs.min() == 0:
+                    continue
+                
+                try:
+                    edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens, edit_locs)
+                except RuntimeError:
+                    breakpoint()
+                
+                
+                inner_opt = torch.optim.SGD(
+                    self.model.transformer.h[-3:].parameters(), 
+                    lr=self.config.inner_lr
+                    )
+
+                with higher.innerloop_ctx(
+                    self.model, 
+                    inner_opt, 
+                    copy_initial_weights=False, 
+                    track_higher_grads=True
+                    ) as (fmodel, diffopt):
+                    
+                    for edit_step in range(self.config.n_edit_steps):
+
+                        loss = fmodel(
+                            edit_tokens, 
+                            attention_mask=edit_mask,
+                            labels=edit_labels
+                        ).loss
+                        diffopt.step(loss)
+
+                    edit_out = fmodel(
+                        edit_tokens, 
+                        attention_mask=edit_mask,
+                        labels=edit_labels
+                    )
+                    l_edit = edit_out.loss
+                    
+                    base_out = self.model(
+                        lm_tokens, 
+                        attention_mask=lm_mask,
+                        labels=lm_labels
+                    )
+                    l_base = base_out.loss
+
+                    edited_base_out = fmodel(
+                        lm_tokens, 
+                        attention_mask=lm_mask,
+                        labels=lm_labels
+                    )
+
+                    l_loc =  (
+                        F.softmax(base_out.logits.detach(), dim=-1) *
+                        (
+                            F.log_softmax(base_out.logits.detach(), dim=-1) - 
+                            F.log_softmax(edited_base_out.logits, dim=-1)
+                        )).sum(-1).mean()
+                    
+                    total_loss = (
+                        l_base + 
+                        self.config.cloc * l_loc  + 
+                        self.config.cedit * l_edit
+                        )
+                    total_loss.backward()
+
+                    # accumulate grads 
+                    if train_step % 5 == 0:
+                        opt.step()
+                        opt.zero_grad()
+                    
+                    global_iter += 1
+                    
+                    loss_dict = {
+                        "l_base": l_base, "l_edit": l_edit, 
+                        "l_loc": l_loc, "total": total_loss
+                        }
+                    self.echo(train_step, **loss_dict)
+                    if not self.config.debug:
+                        self.tensorBoard(global_iter, **loss_dict)
+                        self.saveModel(self.model, train_step)
+
+        if not self.config.debug:
+            self.saveModel(self.model, train_step)
+        self.writer.flush()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--editable', action='store_true')
     parser.add_argument('--finetune', action='store_true')
+    parser.add_argument('--self_sample', action='store_true')
     args = parser.parse_args()
 
-    _, tokenizer = utils.loadOTSModel()
+    ots_model, tokenizer = utils.loadOTSModel()
     dataloader = utils.retrieveDataloader(
         tokenizer, 
         bs=1, 
         dataset='train'
     )
+    del ots_model
 
     if args.editable:
         trainer = EditTrainer(EditConfig(), dataloader)
@@ -276,7 +425,10 @@ if __name__ == "__main__":
     elif args.finetune:
         trainer = BaseTrainer(TrainConfig(), dataloader)
     
+    elif args.self_sample:
+        trainer = SelfSampleTrainer(EditConfig(), dataloader)
+    
     else:
-        raise AttributeError("Must specify --editable or --finetune")
+        raise AttributeError("Must specify train arg")
 
     trainer.run()
