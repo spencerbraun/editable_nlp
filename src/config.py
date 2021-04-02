@@ -34,8 +34,8 @@ class EditConfig:
         self.epochs = 1
         self.max_training_samps = 2e4
         self.n_edit_steps = 1
-        self.cedit = 100
-        self.cloc = 100
+        self.cedit = 1
+        self.cloc = 1
 
         self.debug = False
         self.model_save_pt = 2000

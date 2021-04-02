@@ -272,13 +272,12 @@ class SelfSampleTrainer(EditTrainer):
         input_ids = lm_tokens[:, :edit_locs.min()]
         input_size = input_ids.size()[-1]
         
-        self.model.eval()
+        self.finetuned.eval()
         print("generating")
         output_sequence = self.finetuned.generate(
             input_ids=input_ids,
-            max_length=input_size + 15,
-            temperature=1.2,
-            repetition_penalty=1.0,
+            max_length=input_size + 5,
+            temperature=0.7,
             do_sample=True,
             num_return_sequences=10,
         )
