@@ -141,7 +141,6 @@ def evalSingleEdits(model, dataloader, model_name, n_edit_steps, testset=False):
             edit_labels.to(DEVICE)
             
             gold_tokens = ent_tokens.cpu()
-            # gold_token = gold_token.item() if not gold_token.size() else gold_token[0].item()
             
             orig_logits, orig_prob = getIndexedProbs(
                 model, 
@@ -268,7 +267,7 @@ def evalSelfSample(model, dataloader, model_name, n_edit_steps, testset=False):
         tokenizer=False
     )
     finetuned.to(DEVICE)
-    import ipdb; ipdb.set_trace()
+    
     model.to(DEVICE)
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
     filename = f"edit_success_{timestamp}_{os.path.basename(model_name)}"
@@ -291,11 +290,10 @@ def evalSelfSample(model, dataloader, model_name, n_edit_steps, testset=False):
                 continue
             
             edit_tokens, edit_mask, edit_labels, gold_tokens = genModelText(
-                model, finetuned, lm_tokens, edit_locs
+                finetuned, lm_tokens, edit_locs
                 )
             
             gold_tokens = gold_tokens.cpu()
-            # gold_token = gold_token.item() if not gold_token.size() else gold_token[0].item()
             
             orig_logits, orig_prob = getIndexedProbs(
                 model, 
@@ -362,7 +360,7 @@ if __name__ == "__main__":
     if args.test_set:
         dataloader = retrieveDataloader(tokenizer, bs=1, dataset='test', max_obs=200)
     else:
-        dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=100)
+        dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=100, shuffle=True)
 
     if args.self_sample:
         success_pct, outcomes = evalSelfSample(
