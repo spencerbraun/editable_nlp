@@ -321,13 +321,9 @@ class SelfSampleTrainer(EditTrainer):
                 edit_locs = utils.locateEntityEdit(edit_example[0], ent_tokens)
                 if edit_locs.size == 0 or edit_locs.min() == 0:
                     continue
-                
-                try:
-                    edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens, edit_locs)
-                except RuntimeError:
-                    breakpoint()
-                
-                
+
+                edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens, edit_locs)
+
                 inner_opt = torch.optim.SGD(
                     self.model.transformer.h[-3:].parameters(), 
                     lr=self.config.inner_lr
@@ -410,13 +406,14 @@ if __name__ == "__main__":
     parser.add_argument('--self_sample', action='store_true')
     args = parser.parse_args()
 
-    ots_model, tokenizer = utils.loadOTSModel()
+    tokenizer = GPT2Tokenizer.from_pretrained('distilgpt2')
+    tokenizer.pad_token = tokenizer.eos_token
+
     dataloader = utils.retrieveDataloader(
         tokenizer, 
         bs=1, 
         dataset='train'
     )
-    del ots_model
 
     if args.editable:
         trainer = EditTrainer(EditConfig(), dataloader)
