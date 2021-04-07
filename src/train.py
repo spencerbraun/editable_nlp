@@ -232,27 +232,26 @@ class EditTrainer(BaseTrainer):
                         )
                     total_loss.backward()
 
-                    # accumulate grads 
-                    if train_step % 5 == 0:
-                        opt.step()
-                        opt.zero_grad()
-                    
-                    global_iter += 1
-                    
-                    loss_dict = {
-                        "l_base": l_base, "l_edit": l_edit, 
-                        "l_loc": l_loc, "total": total_loss
-                        }
-                    self.echo(train_step, **loss_dict)
-                    if not self.config.debug:
-                        self.tensorBoard(global_iter, **loss_dict)
-                        self.saveModel(self.model, train_step)
+                # accumulate grads 
+                if train_step % 5 == 0:
+                    opt.step()
+                    opt.zero_grad()
+                
+                global_iter += 1
+                
+                loss_dict = {
+                    "l_base": l_base, "l_edit": l_edit, 
+                    "l_loc": l_loc, "total": total_loss
+                    }
+                self.echo(train_step, **loss_dict)
+                self.tensorBoard(global_iter, **loss_dict)
+                self.saveModel(self.model, train_step)
 
             if (train_step % 1000 == 0) & not self.config.debug:
                 self.validateEditTraining()
 
-        if not self.config.debug:
-            self.saveModel(self.model, train_step)
+        
+        self.saveModel(self.model, train_step)
         self.writer.flush()
 
 
@@ -306,6 +305,14 @@ class SelfSampleTrainer(EditTrainer):
         
         global_iter = 0
         print("Starting Training")
+        
+        lrs = [
+            torch.nn.Parameter(torch.tensor(self.config.inner_lr)) 
+            for p in self.model.parameters()
+            ]
+        lr_opt = torch.optim.Adam(lrs, lr=1e-2)
+
+        skip_count = 0
 
         for epoch in range(self.config.epochs):
             self.epoch = epoch
@@ -319,9 +326,12 @@ class SelfSampleTrainer(EditTrainer):
                 ent_tokens = ent[0].flatten()
                 ent_tokens = ent_tokens[ent_tokens != 50256]
                 edit_locs = utils.locateEntityEdit(edit_example[0], ent_tokens)
-                if edit_locs.size == 0 or edit_locs.min() == 0:
+                if edit_locs.size == 0 or edit_locs.min() < 10:
+                    skip_count += 1
                     continue
-
+                if train_step % 50 == 0:
+                    print(f"SKIPCOUNT: {skip_count}")
+                    
                 edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens, edit_locs)
 
                 inner_opt = torch.optim.SGD(
@@ -329,9 +339,13 @@ class SelfSampleTrainer(EditTrainer):
                     lr=self.config.inner_lr
                     )
 
+                param_groups = [{'params': p, 'lr': None} for p in self.model.parameters()]
+                inner_opt = torch.optim.SGD(param_groups)
+        
                 with higher.innerloop_ctx(
                     self.model, 
                     inner_opt, 
+                    override={'lr': lrs},
                     copy_initial_weights=False, 
                     track_higher_grads=True
                     ) as (fmodel, diffopt):
@@ -379,24 +393,26 @@ class SelfSampleTrainer(EditTrainer):
                         )
                     total_loss.backward()
 
-                    # accumulate grads 
-                    if train_step % 5 == 0:
-                        opt.step()
-                        opt.zero_grad()
-                    
-                    global_iter += 1
-                    
-                    loss_dict = {
-                        "l_base": l_base, "l_edit": l_edit, 
-                        "l_loc": l_loc, "total": total_loss
-                        }
-                    self.echo(train_step, **loss_dict)
-                    if not self.config.debug:
-                        self.tensorBoard(global_iter, **loss_dict)
-                        self.saveModel(self.model, train_step)
-
-        if not self.config.debug:
-            self.saveModel(self.model, train_step)
+                # accumulate grads 
+                if train_step % 5 == 0:
+                    opt.step()
+                    opt.zero_grad()
+                
+                # step inner loop lr
+                lr_opt.step()
+                lr_opt.zero_grad()
+                
+                global_iter += 1
+                
+                loss_dict = {
+                    "l_base": l_base, "l_edit": l_edit, 
+                    "l_loc": l_loc, "total": total_loss
+                    }
+                self.echo(train_step, **loss_dict)
+                self.tensorBoard(global_iter, **loss_dict)
+                self.saveModel(self.model, train_step)
+        
+        self.saveModel(self.model, train_step)
         self.writer.flush()
 
 if __name__ == "__main__":
