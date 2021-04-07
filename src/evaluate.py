@@ -127,6 +127,7 @@ def evalSequentialEdits(
     dataloader, 
     model_name, 
     n_edit_steps,
+    loc="..",
     seq_edits=1,
     self_sample=False, 
     testset=False
@@ -134,7 +135,8 @@ def evalSequentialEdits(
 
     if self_sample:
         finetuned = utils.loadTrainedModel(
-            "../models/finetune/gpt2_epoch0_ts10000.20210310.18.03.1615401990", 
+            f"{loc}/models/finetune/gpt2_epoch0_ts10000.20210310.18.03.1615401990", 
+            cache_dir=loc,
             tokenizer=False
         )
         finetuned.to(DEVICE)
@@ -150,7 +152,7 @@ def evalSequentialEdits(
     if sequential:
         model_edited = copy.deepcopy(model)
 
-    saveloc = f"../eval/{filename}" if not testset else f"../eval/test/{filename}" 
+    saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}" 
     with open(saveloc, "w") as f:
         f.write((
             "train_step,n_edit_steps,edit_number,success,success_diff,"
@@ -238,12 +240,13 @@ def evalSequentialEdits(
                 break
 
 class ModelComps:
-    def __init__(self, model_name, base_name, archive=False, test=False):
+    def __init__(self, model_name, base_name, loc="..", archive=False, test=False):
         
         self.test = test
         self.archive = archive
         self.model_name = model_name
         self.base_name = base_name
+        self.loc = loc
         self.ots_name = "OTS"
         self.models = {}
         self.modelStats = self.getModelParams()
@@ -252,7 +255,7 @@ class ModelComps:
     
     def getModelParams(self):
         model_id = ".".join(self.model_name.split(".")[1:])
-        hyper_obj = torch.load(f"../models/hypers.{model_id}")
+        hyper_obj = torch.load(f"{self.loc}/models/hypers.{model_id}")
         if isinstance(hyper_obj, dict):
             return pd.Series(hyper_obj).to_frame().T
         else:
@@ -268,11 +271,11 @@ class ModelComps:
 
     def readData(self, model_name, kind='model'):
         if self.archive:
-            eval_glob = glob.glob(f"./archive/*{model_name}")
+            eval_glob = glob.glob(f"{self.loc}/eval/archive/*{model_name}")
         elif self.test:
-            eval_glob = glob.glob(f"./test/*{model_name}")
+            eval_glob = glob.glob(f"{self.loc}/eval/test/*{model_name}")
         else:
-            eval_glob = glob.glob(f"./*{model_name}")
+            eval_glob = glob.glob(f"{self.loc}/*{model_name}")
         for evaluation in eval_glob:
             df = pd.read_csv(evaluation)
             eval_id = f"{kind}_{evaluation.split('.')[4].split('_')[0]}"
@@ -364,16 +367,17 @@ if __name__ == "__main__":
     parser.add_argument('--test_set', action='store_true')
     parser.add_argument('--self_sample', action='store_true')
     parser.add_argument('--edit_steps', default=1)
+    parser.add_argument('--loc', default="..")
     args = parser.parse_args()
 
     if args.model_path: 
-        model, tokenizer = loadTrainedModel(args.model_path)
+        model, tokenizer = loadTrainedModel(args.model_path, cache_dir=args.loc)
     else:
-        model_ots, tokenizer = loadOTSModel()
+        model_ots, tokenizer = loadOTSModel(cache_dir=args.loc)
     if args.test_set:
-        dataloader = retrieveDataloader(tokenizer, bs=1, dataset='test', max_obs=200)
+        dataloader = retrieveDataloader(tokenizer, bs=1, data_loc=args.loc, dataset='test', max_obs=200)
     else:
-        dataloader = retrieveDataloader(tokenizer, bs=1, dataset='valid', max_obs=100, shuffle=True)
+        dataloader = retrieveDataloader(tokenizer, bs=1, data_loc=args.loc, dataset='valid', max_obs=100, shuffle=True)
 
     if args.model_path:
         evalSequentialEdits(
@@ -381,6 +385,7 @@ if __name__ == "__main__":
             dataloader, 
             args.model_path, 
             int(args.edit_steps),
+            loc=args.loc,
             self_sample=args.self_sample,
             testset=args.test_set
             )
@@ -391,5 +396,6 @@ if __name__ == "__main__":
             dataloader, 
             "OTS", 
             int(args.edit_steps),
+            loc=args.loc,
             testset=args.test_set
             )

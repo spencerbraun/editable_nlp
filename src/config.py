@@ -8,7 +8,10 @@ class TrainConfig:
 
         self.debug = False
         self.model_save_pt = 2500
-        self.model_dir = '../models/finetune'
+        self.write_loc = '/XXXX'
+        self.model_dir = f'{self.write_loc}/models/finetune'
+
+        self.silent = False
 
 class EditConfig:
     def __init__(self):
@@ -22,4 +25,7 @@ class EditConfig:
 
         self.debug = True
         self.model_save_pt = 2000
-        self.model_dir = '../models'
+        self.write_loc = '/XXXX'
+        self.model_dir = f'{self.write_loc}/models'
+
+        self.silent = False

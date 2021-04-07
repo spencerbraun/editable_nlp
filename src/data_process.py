@@ -145,12 +145,13 @@ class DataProcessor:
 
 
 class TorchDataset(torch.utils.data.Dataset):
-    def __init__(self, list_IDs, tokenizer, dataset='train', max_length=200):
+    def __init__(self, list_IDs, tokenizer, data_loc="..", dataset='train', max_length=200):
         self.list_IDs = list_IDs
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.ent_length = 5
         self.dataset = dataset
+        self.loc = data_loc
         
         
     def tokenize(self, textList, ent=False):
@@ -190,11 +191,11 @@ class TorchDataset(torch.utils.data.Dataset):
         ID = self.list_IDs[index]
         
         if self.dataset == 'train':
-            path = "../data"
+            path = f"{self.loc}/data"
         elif self.dataset == 'valid':
-            path = "../data/valid"
+            path = f"{self.loc}/data/valid"
         elif self.dataset == 'test':
-            path = "../data/test"
+            path = f"{self.loc}/data/test"
 
         with open(f"{path}/original_entities.{ID}") as raw:
             raw_sample = raw.read()

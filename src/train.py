@@ -23,14 +23,14 @@ class BaseTrainer:
         #configs
         self.config = config
         self.model, self.tokenizer = (
-            utils.loadOTSModel() if not model_path else 
-            utils.loadTrainedModel(model_path)
+            utils.loadOTSModel(cache_dir=self.config.write_loc) if not model_path else 
+            utils.loadTrainedModel(model_path, cache_dir=self.config.write_loc)
             )
 
         #outfiles
         self.timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
         self.hyperspath = f"{self.config.model_dir}/hypers.{self.timestamp}"
-        self.errpath = f"errors/errors_{self.timestamp}"
+        self.errpath = f"{self.config.write_loc}/errors/errors_{self.timestamp}"
         self.modelpath = (
             lambda model, epoch, step: 
             f"{self.config.model_dir}/{model}_epoch{epoch}_ts{step}.{self.timestamp}"
@@ -38,7 +38,10 @@ class BaseTrainer:
 
         self.data = dataloader
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.writer = SummaryWriter() if not self.config.debug else None
+        self.writer = (
+            SummaryWriter(log_dir=f"{self.config.write_loc}/runs") 
+            if not self.config.debug else None
+            )
         self.epoch = 0
 
     def saveModel(self, model, train_step, name="model"):
@@ -50,10 +53,11 @@ class BaseTrainer:
                     )
 
     def echo(self, train_step, **kwargs):
-        print((
-                f"Epoch: {self.epoch}; TrainStep {train_step}; ",
-                f"; ".join([f"{key} {val}" for key,val in kwargs.items()])
-            )) 
+        if not self.config.silent:
+            print((
+                    f"Epoch: {self.epoch}; TrainStep {train_step}; ",
+                    f"; ".join([f"{key} {val}" for key,val in kwargs.items()])
+                )) 
 
     def tensorBoard(self, step, **kwargs):
         if not self.config.debug:
@@ -113,6 +117,7 @@ class EditTrainer(BaseTrainer):
         self.validation_set = utils.retrieveDataloader(
             self.tokenizer, 
             bs=15, 
+            data_loc=self.config.write_loc,
             dataset='valid',
             max_obs=1000,
             shuffle=True
@@ -260,7 +265,8 @@ class SelfSampleTrainer(EditTrainer):
         super().__init__(config, dataloader, model_path) 
         
         self.finetuned = utils.loadTrainedModel(
-            "../models/finetune/gpt2_epoch0_ts10000.20210310.18.03.1615401990", 
+            f"{self.config.write_loc}/models/finetune/gpt2_epoch0_ts10000.20210310.18.03.1615401990", 
+            cache_dir=self.config.write_loc,
             tokenizer=False
         )
         self.finetuned.to(self.device)
@@ -420,13 +426,16 @@ if __name__ == "__main__":
     parser.add_argument('--editable', action='store_true')
     parser.add_argument('--finetune', action='store_true')
     parser.add_argument('--self_sample', action='store_true')
+    parser.add_argument('--data_loc', default='..')
     args = parser.parse_args()
 
-    tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+    model_del, tokenizer = utils.loadOTSModel(cache_dir=data_loc)
     tokenizer.pad_token = tokenizer.eos_token
+    del model_del
 
     dataloader = utils.retrieveDataloader(
         tokenizer, 
+        data_loc=args.data_loc,
         bs=1, 
         dataset='train'
     )
