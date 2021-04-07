@@ -5,8 +5,8 @@ from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from data_process import TorchDataset
 
 def loadOTSModel():
-    model = GPT2LMHeadModel.from_pretrained("distilgpt2")
-    tokenizer = GPT2Tokenizer.from_pretrained('distilgpt2')
+    model = GPT2LMHeadModel.from_pretrained("gpt2")
+    tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
     tokenizer.pad_token = tokenizer.eos_token
 
     return model, tokenizer
