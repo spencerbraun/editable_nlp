@@ -22,6 +22,10 @@ class BaseTrainer:
 
         #configs
         self.config = config
+        self.model_dir = (
+            f'{self.config.write_loc}/models/finetune' if self.config.task == 'finetune'
+            else f'{self.config.write_loc}/models'
+            )
         self.model, self.tokenizer = (
             utils.loadOTSModel(cache_dir=self.config.write_loc) if not model_path else 
             utils.loadTrainedModel(model_path, cache_dir=self.config.write_loc)

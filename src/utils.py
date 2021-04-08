@@ -77,7 +77,7 @@ def sailPreprocess():
         f"{local_dir}/data.zip"
         )
     with zipfile.ZipFile(f"{local_dir}/data.zip") as zf:
-        zf.extractall(f"{local_dir}/data")
+        zf.extractall(f"{local_dir}")
 
     
     return local_dir
