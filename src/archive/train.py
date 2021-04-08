@@ -22,6 +22,7 @@ def editableTrainLoop(
     dataloader, 
     validation_set,
     epochs, 
+    loc,
     n_edit_steps=1, 
     cedit=0.1, 
     cloc=0.1, 
@@ -29,11 +30,12 @@ def editableTrainLoop(
     ):
 
     
-    writer = SummaryWriter()
+    
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
-    errpath  = f"errors/errors_{timestamp}"
-    os.mkdir(errpath)
-    hyperspath = f"../models/hypers.{timestamp}"
+    writer = SummaryWriter(log_dir=f"{loc}/runs/editable_orig_{timestamp}") 
+    # errpath  = f"errors/errors_{timestamp}"
+    # os.mkdir(errpath)
+    hyperspath = f"{loc}/models/hypers.{timestamp}"
     hypers = {
         'inner_lr': lr,
         'outer_lr': 1e-5,
@@ -67,8 +69,8 @@ def editableTrainLoop(
             edit_locs = locateEntityEdit(edit_tokens, ent_tokens)
             if edit_locs.size == 0:
                 print(f"Unable to locate edit on TS {train_step}")
-                torch.save(edit_tokens, f"{errpath}/edit_tokens_{train_step}")
-                torch.save(ent_tokens, f"{errpath}/ent_tokens_{train_step}")
+                # torch.save(edit_tokens, f"{errpath}/edit_tokens_{train_step}")
+                # torch.save(ent_tokens, f"{errpath}/ent_tokens_{train_step}")
                 continue
             
             edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
@@ -153,15 +155,15 @@ def editableTrainLoop(
             if (train_step > 0) & (train_step % 2000 == 0):
                 torch.save(
                     model.state_dict(), 
-                    f"../models/model_epoch{epoch}_ts{train_step}.{timestamp}"
+                    f"{loc}/models/model_epoch{epoch}_ts{train_step}.{timestamp}"
                     )  
-            if (train_step > 0) & (train_step % 5000 == 0):
-                torch.save(
-                    fmodel.state_dict(), 
-                    f"../models/fmodel_epoch{epoch}_ts{train_step}.{timestamp}"
-                    ) 
+            # if (train_step > 0) & (train_step % 5000 == 0):
+            #     torch.save(
+            #         fmodel.state_dict(), 
+            #         f"{loc}/models/fmodel_epoch{epoch}_ts{train_step}.{timestamp}"
+            #         ) 
 
-    torch.save(model.state_dict(), f"../models/model_epoch_FINAL.{timestamp}")
+    torch.save(model.state_dict(), f"{loc}/models/model_epoch_FINAL.{timestamp}")
     writer.flush()
 
 def genModelText(finetuned, lm_tokens, edit_locs):
@@ -431,16 +433,19 @@ if __name__ == "__main__":
     parser.add_argument('--self_sample', action='store_true')
     args = parser.parse_args()
 
+    loc = utils.sailPreprocess()
     
-    model, tokenizer = loadOTSModel()
+    model, tokenizer = loadOTSModel(cache_dir=loc)
     dataloader = retrieveDataloader(
         tokenizer, 
         bs=1, 
+        data_loc=loc,
         dataset='train'
     )
     validation_set = retrieveDataloader(
         tokenizer, 
         bs=15, 
+        data_loc=loc,
         dataset='valid',
         max_obs=1000,
         shuffle=True
@@ -452,6 +457,7 @@ if __name__ == "__main__":
             dataloader, 
             validation_set,
             epochs=1,
+            loc=loc,
             n_edit_steps=1, 
             cedit=0.1, 
             cloc=0.1, 
