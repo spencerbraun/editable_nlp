@@ -4,11 +4,9 @@ class TrainConfig:
         self.outer_lr = 1e-5
         self.epochs = 1
         self.max_training_samps = 1e4
-        self.cedit = 1
-        self.cloc = 1
 
-        self.debug = False
-        self.model_save_pt = 2500
+        self.debug = True
+        self.model_save_pt = 5000
         self.write_loc = '..'
 
         self.silent = False

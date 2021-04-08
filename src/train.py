@@ -256,7 +256,7 @@ class EditTrainer(BaseTrainer):
                 self.tensorBoard(global_iter, **loss_dict)
                 self.saveModel(self.model, train_step)
 
-            if (train_step % 1000 == 0) & not self.config.debug:
+            if (train_step % 1000 == 0) & (not self.config.debug):
                 self.validateEditTraining()
 
         
@@ -432,7 +432,7 @@ if __name__ == "__main__":
     parser.add_argument('--self_sample', action='store_true')
     # parser.add_argument('--data_loc', default='..')
     args = parser.parse_args()
-    
+    import ipdb; ipdb.set_trace() 
     loc = utils.sailPreprocess()
 
     model_del, tokenizer = utils.loadOTSModel(cache_dir=loc)
