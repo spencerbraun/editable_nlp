@@ -3,9 +3,9 @@ class TrainConfig:
         self.task = 'finetune'
         self.outer_lr = 1e-5
         self.epochs = 1
-        self.max_training_samps = 1e4
+        self.max_training_samps = 1.5e4
 
-        self.debug = True
+        self.debug = False
         self.model_save_pt = 5000
         self.write_loc = '..'
 

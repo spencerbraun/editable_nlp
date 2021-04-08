@@ -33,9 +33,9 @@ def retrieveDataloader(
 
     fileIndex = max(map(lambda x: int(x.split(".")[-1]), writtenFiles))
     limitIndex = min(max_obs, fileIndex)
-    dataset = TorchDataset(list(range(limitIndex)), tokenizer, dataset)
+    ds = TorchDataset(list(range(limitIndex)), tokenizer, data_loc=data_loc, dataset=dataset)
     dataloader = torch.utils.data.DataLoader(
-        dataset,
+        ds,
         batch_size=bs,
         num_workers=2,
         pin_memory=True,

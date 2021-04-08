@@ -92,7 +92,7 @@ class BaseTrainer:
                 lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
                 lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
                 
-                base_out = model(
+                base_out = self.model(
                     lm_tokens, 
                     attention_mask=lm_mask,
                     labels=lm_labels
