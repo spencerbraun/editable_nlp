@@ -37,7 +37,7 @@ def retrieveDataloader(
     dataloader = torch.utils.data.DataLoader(
         dataset,
         batch_size=bs,
-        num_workers=4,
+        num_workers=2,
         pin_memory=True,
         shuffle=shuffle
     )
@@ -72,6 +72,7 @@ def sailPreprocess():
     
     os.mkdir(f"{save_loc}/spencerb")
     os.mkdir(f"{save_loc}/spencerb/models")
+    os.mkdir(f"{save_loc}/spencerb/models/finetune")
     os.mkdir(f"{save_loc}/spencerb/eval")
     copyfile(
         "/juice/scr/spencerb/editable_nlp/data.zip", 

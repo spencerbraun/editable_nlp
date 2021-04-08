@@ -33,11 +33,11 @@ class BaseTrainer:
 
         #outfiles
         self.timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
-        self.hyperspath = f"{self.config.model_dir}/hypers.{self.timestamp}"
+        self.hyperspath = f"{self.model_dir}/hypers.{self.timestamp}"
         self.errpath = f"{self.config.write_loc}/errors/errors_{self.timestamp}"
         self.modelpath = (
             lambda model, epoch, step: 
-            f"{self.config.model_dir}/{model}_epoch{epoch}_ts{step}.{self.timestamp}"
+            f"{self.model_dir}/{model}_epoch{epoch}_ts{step}.{self.timestamp}"
             )
 
         self.data = dataloader
@@ -432,7 +432,7 @@ if __name__ == "__main__":
     parser.add_argument('--self_sample', action='store_true')
     # parser.add_argument('--data_loc', default='..')
     args = parser.parse_args()
-    import ipdb; ipdb.set_trace() 
+    
     loc = utils.sailPreprocess()
 
     model_del, tokenizer = utils.loadOTSModel(cache_dir=loc)
@@ -450,13 +450,13 @@ if __name__ == "__main__":
     config.write_loc = loc
 
     if args.editable:
-        trainer = EditTrainer(EditConfig(), dataloader)
+        trainer = EditTrainer(config, dataloader)
     
     elif args.finetune:
-        trainer = BaseTrainer(TrainConfig(), dataloader)
+        trainer = BaseTrainer(config, dataloader)
     
     elif args.self_sample:
-        trainer = SelfSampleTrainer(config(), dataloader)
+        trainer = SelfSampleTrainer(config, dataloader)
     
     else:
         raise AttributeError("Must specify train arg")
