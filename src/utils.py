@@ -73,6 +73,7 @@ def sailPreprocess(debug=False):
     os.mkdir(f"{save_loc}/spencerb")
     os.mkdir(f"{save_loc}/spencerb/models")
     os.mkdir(f"{save_loc}/spencerb/models/finetune")
+    os.mkdir(f"{save_loc}/spencerb/errors")
     os.mkdir(f"{save_loc}/spencerb/eval")
     copyfile(
         "/juice/scr/spencerb/editable_nlp/data.zip", 

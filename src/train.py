@@ -13,7 +13,7 @@ import higher
 from torch.utils.tensorboard import SummaryWriter
 
 import utils
-from config import TrainConfig, EditConfig
+from config import TrainConfig, EditConfig, SelfSampleConfig
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -177,8 +177,10 @@ class EditTrainer(BaseTrainer):
                 edit_locs = utils.locateEntityEdit(edit_tokens, ent_tokens)
                 if edit_locs.size == 0:
                     print(f"Unable to locate edit on TS {train_step}")
-                    torch.save(edit_tokens, f"{self.errpath}/edit_tokens_{train_step}")
-                    torch.save(ent_tokens, f"{self.errpath}/ent_tokens_{train_step}")
+                    #if not os.path.exists("{self.errpath}"):
+                        #os.mkdir("{self.errpath}")
+                    #torch.save(edit_tokens, f"{self.errpath}/edit_tokens_{train_step}")
+                    #torch.save(ent_tokens, f"{self.errpath}/ent_tokens_{train_step}")
                     continue
                 
                 edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
@@ -344,7 +346,6 @@ class SelfSampleTrainer(EditTrainer):
                     print(f"SKIPCOUNT: {skip_count}")
                     
                 edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens, edit_locs)
-
                 param_groups = [{'params': p, 'lr': None} for p in self.model.parameters()]
                 inner_opt = torch.optim.SGD(param_groups)
         
@@ -404,9 +405,9 @@ class SelfSampleTrainer(EditTrainer):
                     opt.step()
                     opt.zero_grad()
                 
-                # step inner loop lr
-                lr_opt.step()
-                lr_opt.zero_grad()
+                    # step inner loop lr
+                    lr_opt.step()
+                    lr_opt.zero_grad()
                 
                 global_iter += 1
                 
@@ -442,16 +443,19 @@ if __name__ == "__main__":
         dataset='train'
     )
 
-    config = EditConfig() if not args.finetune else TrainConfig()
-    config.write_loc = loc
-
     if args.editable:
+        config = EditConfig()
+        config.write_loc = loc
         trainer = EditTrainer(config, dataloader)
     
     elif args.finetune:
+        config = TrainConfig()
+        config.write_loc = loc
         trainer = BaseTrainer(config, dataloader)
     
     elif args.self_sample:
+        config = SelfSampleConfig()
+        config.write_loc = loc
         trainer = SelfSampleTrainer(config, dataloader)
     
     else:
