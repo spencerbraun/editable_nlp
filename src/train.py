@@ -426,19 +426,24 @@ if __name__ == "__main__":
     parser.add_argument('--editable', action='store_true')
     parser.add_argument('--finetune', action='store_true')
     parser.add_argument('--self_sample', action='store_true')
-    parser.add_argument('--data_loc', default='..')
+    # parser.add_argument('--data_loc', default='..')
     args = parser.parse_args()
+    
+    loc = utils.sailPreprocess()
 
-    model_del, tokenizer = utils.loadOTSModel(cache_dir=data_loc)
+    model_del, tokenizer = utils.loadOTSModel(cache_dir=loc)
     tokenizer.pad_token = tokenizer.eos_token
     del model_del
 
     dataloader = utils.retrieveDataloader(
         tokenizer, 
-        data_loc=args.data_loc,
+        data_loc=loc,
         bs=1, 
         dataset='train'
     )
+
+    config = EditConfig() if not args.finetune else TrainConfig()
+    config.write_loc = loc
 
     if args.editable:
         trainer = EditTrainer(EditConfig(), dataloader)
@@ -447,7 +452,7 @@ if __name__ == "__main__":
         trainer = BaseTrainer(TrainConfig(), dataloader)
     
     elif args.self_sample:
-        trainer = SelfSampleTrainer(EditConfig(), dataloader)
+        trainer = SelfSampleTrainer(config(), dataloader)
     
     else:
         raise AttributeError("Must specify train arg")

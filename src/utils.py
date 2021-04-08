@@ -1,3 +1,7 @@
+import os
+import platform
+from shutil import copyfile
+
 import glob
 import numpy as np
 import torch
@@ -55,3 +59,25 @@ def locateEntityEdit(edit_tokens, ent_tokens):
             ent_tokens.numpy()
             )
         ).flatten()
+
+
+def sailPreprocess():
+    machine_name = platform.node().split(".")[0]
+    scr = max(os.listdir(f"/{machine_name}"))
+    save_loc = f"/{machine_name}/{scr}"
+    local_dir = f"{save_loc}/spencerb"
+    if os.path.exists(local_dir):
+        return local_dir
+    
+    os.mkdir(f"{save_loc}/spencerb")
+    os.mkdir(f"{save_loc}/spencerb/models")
+    os.mkdir(f"{save_loc}/spencerb/eval")
+    copyfile(
+        "/juice/scr/spencerb/editable_nlp/data.zip", 
+        f"{local_dir}/data.zip"
+        )
+    with zipfile.ZipFile(f"{local_dir}/data.zip") as zf:
+        zf.extractall(f"{local_dir}/data")
+
+    
+    return local_dir
