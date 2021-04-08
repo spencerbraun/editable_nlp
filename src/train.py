@@ -346,13 +346,23 @@ class SelfSampleTrainer(EditTrainer):
                     print(f"SKIPCOUNT: {skip_count}")
                     
                 edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens, edit_locs)
-                param_groups = [{'params': p, 'lr': None} for p in self.model.parameters()]
-                inner_opt = torch.optim.SGD(param_groups)
+                
+                param_groups = [
+                    {'params': p, 'lr': None} 
+                    for p in self.model.transformer.h[-3:].parameters()
+                    ]
+                inner_opt = (
+                    torch.optim.SGD(param_groups) if self.config.learnable_lr
+                    else torch.optim.SGD(
+                        self.model.transformer.h[-3:].parameters(), 
+                        lr=self.config.inner_lr
+                        )
+                    )
         
                 with higher.innerloop_ctx(
                     self.model, 
                     inner_opt, 
-                    override={'lr': lrs},
+                    override={'lr': lrs} if self.config.learnable_lr else None,
                     copy_initial_weights=False, 
                     track_higher_grads=True
                     ) as (fmodel, diffopt):
@@ -405,9 +415,9 @@ class SelfSampleTrainer(EditTrainer):
                     opt.step()
                     opt.zero_grad()
                 
-                    # step inner loop lr
-                    lr_opt.step()
-                    lr_opt.zero_grad()
+                    if self.config.learnable_lr:
+                        lr_opt.step()
+                        lr_opt.zero_grad()
                 
                 global_iter += 1
                 

@@ -38,6 +38,7 @@ class SelfSampleConfig:
         self.n_edit_steps = 1
         self.cedit = 1
         self.cloc = 10
+        self.learnable_lr = False
 
         self.debug = False
         self.model_save_pt = 5000
