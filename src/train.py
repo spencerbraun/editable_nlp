@@ -43,7 +43,7 @@ class BaseTrainer:
         self.data = dataloader
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.writer = (
-            SummaryWriter(log_dir=f"{self.config.write_loc}/runs") 
+            SummaryWriter(log_dir=f"{self.config.write_loc}/runs/{self.config.task}_{self.timestamp}") 
             if not self.config.debug else None
             )
         self.epoch = 0
@@ -269,10 +269,11 @@ class SelfSampleTrainer(EditTrainer):
         super().__init__(config, dataloader, model_path) 
         
         self.finetuned = utils.loadTrainedModel(
-            f"{self.config.write_loc}/models/finetune/gpt2_epoch0_ts10000.20210310.18.03.1615401990", 
+            f"{self.config.write_loc}/models/finetune/gpt2_epoch0_ts10000.20210408.09.04.1617899457", 
             cache_dir=self.config.write_loc,
             tokenizer=False
         )
+        self.finetuned.eval()
         self.finetuned.to(self.device)
         
     def genModelText(self, lm_tokens, edit_locs):
@@ -302,7 +303,7 @@ class SelfSampleTrainer(EditTrainer):
 
     
     def run(self):
-
+        
         if not self.config.debug:
             torch.save(self.config, self.hyperspath)
 
@@ -343,11 +344,6 @@ class SelfSampleTrainer(EditTrainer):
                     print(f"SKIPCOUNT: {skip_count}")
                     
                 edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens, edit_locs)
-
-                inner_opt = torch.optim.SGD(
-                    self.model.transformer.h[-3:].parameters(), 
-                    lr=self.config.inner_lr
-                    )
 
                 param_groups = [{'params': p, 'lr': None} for p in self.model.parameters()]
                 inner_opt = torch.optim.SGD(param_groups)

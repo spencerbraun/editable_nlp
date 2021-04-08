@@ -62,12 +62,12 @@ def locateEntityEdit(edit_tokens, ent_tokens):
         ).flatten()
 
 
-def sailPreprocess():
+def sailPreprocess(debug=False):
     machine_name = platform.node().split(".")[0]
     scr = max(os.listdir(f"/{machine_name}"))
     save_loc = f"/{machine_name}/{scr}"
     local_dir = f"{save_loc}/spencerb"
-    if os.path.exists(local_dir):
+    if os.path.exists(local_dir) | debug:
         return local_dir
     
     os.mkdir(f"{save_loc}/spencerb")
