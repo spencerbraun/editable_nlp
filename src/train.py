@@ -91,7 +91,7 @@ class BaseTrainer:
         for epoch in range(self.config.epochs):
             self.epoch = epoch
             
-            for train_step, (lm_data, _, _) in enumerate(self.data):
+            for train_step, (lm_data, _, _, _) in enumerate(self.data):
                 
                 lm_tokens, lm_mask = lm_data
                 lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
@@ -135,7 +135,7 @@ class EditTrainer(BaseTrainer):
 
     def validateEditTraining(self):
         self.model.eval()
-        for train_step, (lm_data, _, _) in enumerate(self.validation_set):
+        for train_step, (lm_data, _, _, _) in enumerate(self.validation_set):
                 
                 lm_tokens, lm_mask = lm_data
                 lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
@@ -169,7 +169,7 @@ class EditTrainer(BaseTrainer):
         for epoch in range(self.config.epochs):
             self.epoch = epoch
             
-            for train_step, (lm_data, edit_example, ent) in enumerate(self.data):
+            for train_step, (lm_data, edit_example, ent, old_ent) in enumerate(self.data):
             
                 lm_tokens, lm_mask = lm_data
                 lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
@@ -335,26 +335,30 @@ class SelfSampleTrainer(EditTrainer):
         for epoch in range(self.config.epochs):
             self.epoch = epoch
             
-            for train_step, (lm_data, edit_example, ent) in enumerate(self.data):
-            
+            for train_step, (lm_data, edit_example, new_ent, old_ent) in enumerate(self.data):
                 lm_tokens, lm_mask = lm_data
-                
-                ent_tokens = ent[0].flatten()
+                orig_ent_tokens = old_ent[0].flatten()
+                orig_ent_tokens = orig_ent_tokens[orig_ent_tokens != 50256]
+
+                edit_tokens, edit_mask = edit_example
+                ent_tokens = new_ent[0].flatten() #1d array of vocab indexes
                 ent_tokens = ent_tokens[ent_tokens != 50256]
-                edit_locs = utils.locateSubset(edit_example[0], ent_tokens)
+
+                if self_sample:
+                    edit_locs = utils.locateSubset(lm_tokens, orig_ent_tokens)
+                else:
+                    edit_locs = utils.locateSubset(edit_tokens, ent_tokens)
+                
+                lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
+                lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
                 
                 if train_step % 50 == 0:
                     print(f"SKIPCOUNT: {skip_count}")
                 
-                lm_start = utils.locateSubset(lm_tokens, edit_example[0])
-                lm_locs = lm_start.min().item() + edit_locs
-                if lm_locs.size == 0 or lm_locs.min() < 10:
+                if edit_locs.nelement() == 0 or (edit_locs.min() < 10):
                     skip_count += 1
                     continue
-                edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens, lm_locs)
-
-                lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
-                lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
+                edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens, edit_locs)
                 
                 param_groups = [
                     {'params': p, 'lr': None} 
