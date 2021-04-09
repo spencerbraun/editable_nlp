@@ -178,10 +178,9 @@ def evalSequentialEdits(
             edit_tokens, edit_mask = edit_example
             ent_tokens = new_ent[0].flatten() #1d array of vocab indexes
             ent_tokens = ent_tokens[ent_tokens != 50256]
-    
-            
+
             if self_sample:
-                if edit_locs.nelement() == 0:
+                if edit_locs.nelement() == 0 or (edit_locs.min() < 10):
                     print(f"Skipping {train_step}")
                     continue
                 edit_tokens, edit_mask, edit_labels, gold_tokens = genModelText(
@@ -390,7 +389,7 @@ if __name__ == "__main__":
     if args.test_set:
         dataloader = utils.retrieveDataloader(tokenizer, bs=1, data_loc=loc, dataset='test', max_obs=200)
     else:
-        dataloader = utils.retrieveDataloader(tokenizer, bs=1, data_loc=loc, dataset='valid', max_obs=100, shuffle=False)
+        dataloader = utils.retrieveDataloader(tokenizer, bs=1, data_loc=loc, dataset='valid')
 
     if args.model_path:
         evalSequentialEdits(
