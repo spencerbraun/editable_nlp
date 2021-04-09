@@ -326,7 +326,7 @@ class SelfSampleTrainer(EditTrainer):
         
         lrs = [
             torch.nn.Parameter(torch.tensor(self.config.inner_lr)) 
-            for p in self.model.parameters()
+            for p in self.model.transformer.h[-3:].parameters()
             ]
         lr_opt = torch.optim.Adam(lrs, lr=1e-2)
 

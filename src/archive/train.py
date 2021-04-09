@@ -12,6 +12,8 @@ import torch.nn.functional as F
 import higher
 from torch.utils.tensorboard import SummaryWriter
 
+import sys
+sys.path.append("/juice/scr/spencerb/editable_nlp/src")
 import utils
 from utils import loadOTSModel, retrieveDataloader, locateEntityEdit
 
@@ -43,7 +45,7 @@ def editableTrainLoop(
         'cedit': cedit,
         'cloc': cloc
     }
-    torch.save(hypers, savepath)
+    torch.save(hypers, hyperspath)
     
     total_epochs = epochs
     model.train()
@@ -139,19 +141,19 @@ def editableTrainLoop(
                     f"Total Loss {total_loss}"
                 )) 
 
-                writer.add_scalar("Lbase", l_base, global_iter)
-                writer.add_scalar("Ledit", l_edit, global_iter)
-                writer.add_scalar("Lloc", l_loc, global_iter)
-                writer.add_scalar("total_loss", total_loss, global_iter)
+                writer.add_scalar("l_base", l_base, global_iter)
+                writer.add_scalar("l_edit", l_edit, global_iter)
+                writer.add_scalar("l_loc", l_loc, global_iter)
+                writer.add_scalar("total", total_loss, global_iter)
             
 
-            if (train_step > 0) & (train_step % 1000 == 0):
-                valid_iter = validateEditTraining(
-                    model, 
-                    validation_set, 
-                    writer, 
-                    valid_iter
-                    )
+            #if (train_step > 0) & (train_step % 1000 == 0):
+                #valid_iter = validateEditTraining(
+                    #model, 
+                    #validation_set, 
+                    #writer, 
+                    #valid_iter
+                    #)
             if (train_step > 0) & (train_step % 2000 == 0):
                 torch.save(
                     model.state_dict(), 
@@ -459,8 +461,8 @@ if __name__ == "__main__":
             epochs=1,
             loc=loc,
             n_edit_steps=1, 
-            cedit=0.1, 
-            cloc=0.1, 
+            cedit=1, 
+            cloc=10, 
             lr=1e-3
         )
     
