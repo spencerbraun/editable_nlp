@@ -203,12 +203,15 @@ class TorchDataset(torch.utils.data.Dataset):
             permuted_sample = perm.read()
         with open(f"{path}/entity_swaps.{ID}") as ent:
             ent_sample = ent.read()
-            new_ent = ent_sample.strip().split('|')[-1]
+            ents = ent_sample.strip().split('|')
+            new_ent = ents[-1]
+            old_ent = ents[0]
 
         raw, perm = self.tokenize([" "+raw_sample, " "+permuted_sample])
-        ent = self.tokenize([" "+new_ent], ent=True)
+        new_ent_tok, old_ent_tok = self.tokenize([" "+new_ent, " "+old_ent], ent=True)
 
-        return raw, perm, ent
+
+        return raw, perm, new_ent_tok, old_ent_tok
 
 
 def generateDataset(

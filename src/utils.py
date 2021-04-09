@@ -58,6 +58,8 @@ def loadTrainedModel(modelPath, cache_dir=None, tokenizer=True):
     return model, tok
 
 def locateSubset(whole, subset):
+    whole = whole.flatten().cpu().numpy()
+    subset = subset.flatten().cpu().numpy()
     start = subset[0]
     len_sub = len(subset)
     locs = np.where(whole == start)[0]
@@ -67,7 +69,7 @@ def locateSubset(whole, subset):
         whole_slice = whole[loc:(loc+len_sub)]
         if len(subset) != len(whole_slice):
             return empty
-        if torch.all(subset == whole_slice):
+        if np.all(subset == whole_slice):
             sub_loc = torch.tensor(range(loc,(loc+len_sub)))
             return sub_loc
 

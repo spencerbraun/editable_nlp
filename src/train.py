@@ -338,8 +338,6 @@ class SelfSampleTrainer(EditTrainer):
             for train_step, (lm_data, edit_example, ent) in enumerate(self.data):
             
                 lm_tokens, lm_mask = lm_data
-                lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
-                lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
                 
                 ent_tokens = ent[0].flatten()
                 ent_tokens = ent_tokens[ent_tokens != 50256]
@@ -354,6 +352,9 @@ class SelfSampleTrainer(EditTrainer):
                     skip_count += 1
                     continue
                 edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens, lm_locs)
+
+                lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
+                lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
                 
                 param_groups = [
                     {'params': p, 'lr': None} 

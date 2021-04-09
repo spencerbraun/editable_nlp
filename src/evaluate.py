@@ -24,7 +24,7 @@ def perplexity(model, dataloader):
     model.to(DEVICE)
     model.eval()
     with torch.no_grad():
-        for batch_idx, (lm_data, _, _) in enumerate(dataloader):
+        for batch_idx, (lm_data, _, _, _) in enumerate(dataloader):
             lm_tokens, lm_mask = lm_data
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
@@ -157,24 +157,23 @@ def evalSequentialEdits(
             "train_step,n_edit_steps,edit_number,success,success_diff,"
             "new_logits,orig_logits,new_ppl,orig_ppl,new_prob,old_prob\n"
             ))
-        for train_step, (lm_data, edit_example, ent) in enumerate(dataloader):
+        for train_step, (lm_data, edit_example, new_ent, old_ent) in enumerate(dataloader):
             print(f"TS {train_step}")
             lm_tokens, lm_mask = lm_data
+            orig_ent_tokens = old_ent[0].flatten()
+            orig_ent_tokens = orig_ent_tokens[orig_ent_tokens != 50256]
+            lm_locs = utils.locateSubset(lm_tokens, orig_ent_tokens)
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
-            
+             
             edit_tokens, edit_mask = edit_example
-            ent_tokens = ent[0].flatten() #1d array of vocab indexes
+            ent_tokens = new_ent[0].flatten() #1d array of vocab indexes
             ent_tokens = ent_tokens[ent_tokens != 50256]
     
             edit_locs = utils.locateSubset(edit_tokens, ent_tokens)
-            if edit_locs.size == 0 or (edit_locs.min() < 10 & self_sample):
-                print(f"Skipping {train_step}")
-                continue
             
             if self_sample:
-                lm_start = utils.locateSubset(lm_tokens, edit_tokens)
-                lm_locs = lm_start.min().item() + edit_locs
+                lm_locs = utils.locateSubset(lm_tokens, orig_ent_tokens)
                 edit_tokens, edit_mask, edit_labels, gold_tokens = genModelText(
                     finetuned, lm_tokens, lm_locs
                     )
@@ -187,6 +186,7 @@ def evalSequentialEdits(
                 edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
                 
                 gold_tokens = ent_tokens.cpu()
+
             
             orig_logits, orig_prob = getIndexedProbs(
                 model, 
