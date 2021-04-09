@@ -95,7 +95,6 @@ def performOneEdit(
 
 def genModelText(finetuned, lm_tokens, edit_locs):
         
-
         input_ids = lm_tokens[:, :edit_locs.min()]
         input_size = input_ids.size()[-1]
         
@@ -159,10 +158,20 @@ def evalSequentialEdits(
             ))
         for train_step, (lm_data, edit_example, new_ent, old_ent) in enumerate(dataloader):
             print(f"TS {train_step}")
+            
             lm_tokens, lm_mask = lm_data
             orig_ent_tokens = old_ent[0].flatten()
             orig_ent_tokens = orig_ent_tokens[orig_ent_tokens != 50256]
-            lm_locs = utils.locateSubset(lm_tokens, orig_ent_tokens)
+
+            edit_tokens, edit_mask = edit_example
+            ent_tokens = new_ent[0].flatten() #1d array of vocab indexes
+            ent_tokens = ent_tokens[ent_tokens != 50256]
+
+            if self_sample:
+                edit_locs = utils.locateSubset(lm_tokens, orig_ent_tokens)
+            else:
+                edit_locs = utils.locateSubset(edit_tokens, ent_tokens)
+            
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
              
@@ -170,12 +179,13 @@ def evalSequentialEdits(
             ent_tokens = new_ent[0].flatten() #1d array of vocab indexes
             ent_tokens = ent_tokens[ent_tokens != 50256]
     
-            edit_locs = utils.locateSubset(edit_tokens, ent_tokens)
             
             if self_sample:
-                lm_locs = utils.locateSubset(lm_tokens, orig_ent_tokens)
+                if edit_locs.nelement() == 0:
+                    print(f"Skipping {train_step}")
+                    continue
                 edit_tokens, edit_mask, edit_labels, gold_tokens = genModelText(
-                    finetuned, lm_tokens, lm_locs
+                    finetuned, lm_tokens, edit_locs
                     )
                 
                 gold_tokens = gold_tokens.cpu()
