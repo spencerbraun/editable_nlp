@@ -135,7 +135,7 @@ def evalSequentialEdits(
 
     if self_sample:
         finetuned = utils.loadTrainedModel(
-            f"{loc}/models/finetune/gpt2_epoch0_ts10000.20210310.18.03.1615401990", 
+            f"{loc}/models/finetune/gpt2_epoch0_ts10000.20210408.09.04.1617899457", 
             cache_dir=loc,
             tokenizer=False
         )
@@ -173,10 +173,14 @@ def evalSequentialEdits(
                 continue
             
             if self_sample:
-                edit_tokens, edit_mask, edit_labels, gold_tokens = genModelText(
-                    finetuned, lm_tokens, edit_locs
-                    )
-            
+                try:
+                    edit_tokens, edit_mask, edit_labels, gold_tokens = genModelText(
+                        finetuned, lm_tokens, edit_locs
+                        )
+                except RuntimeError:
+                    print(f"RTE on TS {train_step}")
+                    continue
+                        
                 gold_tokens = gold_tokens.cpu()
             else:
                 edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
@@ -367,17 +371,18 @@ if __name__ == "__main__":
     parser.add_argument('--test_set', action='store_true')
     parser.add_argument('--self_sample', action='store_true')
     parser.add_argument('--edit_steps', default=1)
-    parser.add_argument('--loc', default="..")
     args = parser.parse_args()
 
+    loc = utils.sailPreprocess()
+
     if args.model_path: 
-        model, tokenizer = loadTrainedModel(args.model_path, cache_dir=args.loc)
+        model, tokenizer = loadTrainedModel(args.model_path, cache_dir=loc)
     else:
-        model_ots, tokenizer = loadOTSModel(cache_dir=args.loc)
+        model_ots, tokenizer = loadOTSModel(cache_dir=loc)
     if args.test_set:
-        dataloader = retrieveDataloader(tokenizer, bs=1, data_loc=args.loc, dataset='test', max_obs=200)
+        dataloader = retrieveDataloader(tokenizer, bs=1, data_loc=loc, dataset='test', max_obs=200)
     else:
-        dataloader = retrieveDataloader(tokenizer, bs=1, data_loc=args.loc, dataset='valid', max_obs=100, shuffle=True)
+        dataloader = retrieveDataloader(tokenizer, bs=1, data_loc=loc, dataset='valid', max_obs=100, shuffle=True)
 
     if args.model_path:
         evalSequentialEdits(
@@ -385,7 +390,7 @@ if __name__ == "__main__":
             dataloader, 
             args.model_path, 
             int(args.edit_steps),
-            loc=args.loc,
+            loc=loc,
             self_sample=args.self_sample,
             testset=args.test_set
             )
@@ -396,6 +401,6 @@ if __name__ == "__main__":
             dataloader, 
             "OTS", 
             int(args.edit_steps),
-            loc=args.loc,
+            loc=loc,
             testset=args.test_set
             )
