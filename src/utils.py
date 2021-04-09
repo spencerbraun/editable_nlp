@@ -10,8 +10,12 @@ from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from data_process import TorchDataset
 
 def loadOTSModel(cache_dir=None):
-    model = GPT2LMHeadModel.from_pretrained("gpt2", cache_dir=cache_dir if cache_dir else None)
-    tokenizer = GPT2Tokenizer.from_pretrained('gpt2', cache_dir=cache_dir if cache_dir else None)
+    model = GPT2LMHeadModel.from_pretrained(
+        "gpt2", cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        )
+    tokenizer = GPT2Tokenizer.from_pretrained(
+        'gpt2', cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        )
     tokenizer.pad_token = tokenizer.eos_token
 
     return model, tokenizer
@@ -75,6 +79,7 @@ def sailPreprocess(debug=False):
     os.mkdir(f"{save_loc}/spencerb/models/finetune")
     os.mkdir(f"{save_loc}/spencerb/errors")
     os.mkdir(f"{save_loc}/spencerb/eval")
+    os.mkdir(f"{save_loc}/spencerb/hf")
     copyfile(
         "/juice/scr/spencerb/editable_nlp/data.zip", 
         f"{local_dir}/data.zip"

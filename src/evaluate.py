@@ -168,7 +168,7 @@ def evalSequentialEdits(
             ent_tokens = ent_tokens[ent_tokens != 50256]
     
             edit_locs = locateEntityEdit(edit_tokens, ent_tokens)
-            if edit_locs.size == 0 or (edit_locs.min() == 0 & self_sample):
+            if edit_locs.size == 0 or (edit_locs.min() < 10 & self_sample):
                 print(f"Skipping {train_step}")
                 continue
             
