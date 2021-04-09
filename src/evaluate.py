@@ -158,6 +158,7 @@ def evalSequentialEdits(
             "new_logits,orig_logits,new_ppl,orig_ppl,new_prob,old_prob\n"
             ))
         for train_step, (lm_data, edit_example, ent) in enumerate(dataloader):
+            print(f"TS {train_step}")
             lm_tokens, lm_mask = lm_data
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
@@ -379,7 +380,7 @@ if __name__ == "__main__":
     if args.test_set:
         dataloader = utils.retrieveDataloader(tokenizer, bs=1, data_loc=loc, dataset='test', max_obs=200)
     else:
-        dataloader = utils.retrieveDataloader(tokenizer, bs=1, data_loc=loc, dataset='valid', max_obs=100, shuffle=True)
+        dataloader = utils.retrieveDataloader(tokenizer, bs=1, data_loc=loc, dataset='valid', max_obs=100, shuffle=False)
 
     if args.model_path:
         evalSequentialEdits(
