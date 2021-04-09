@@ -344,10 +344,7 @@ class SelfSampleTrainer(EditTrainer):
                 ent_tokens = new_ent[0].flatten() #1d array of vocab indexes
                 ent_tokens = ent_tokens[ent_tokens != 50256]
 
-                if self_sample:
-                    edit_locs = utils.locateSubset(lm_tokens, orig_ent_tokens)
-                else:
-                    edit_locs = utils.locateSubset(edit_tokens, ent_tokens)
+                edit_locs = utils.locateSubset(lm_tokens, orig_ent_tokens)
                 
                 lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
                 lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)

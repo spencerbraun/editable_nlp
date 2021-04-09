@@ -31,7 +31,7 @@ class EditConfig:
 class SelfSampleConfig:
     def __init__(self):
         self.task = 'self_sample'
-        self.inner_lr = 1e-2
+        self.inner_lr = 1e-3
         self.outer_lr = 1e-5
         self.epochs = 1
         self.max_training_samps = 1.5e4
