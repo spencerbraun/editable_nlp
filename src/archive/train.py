@@ -15,7 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 import sys
 sys.path.append("/juice/scr/spencerb/editable_nlp/src")
 import utils
-from utils import loadOTSModel, retrieveDataloader, locateEntityEdit
+from utils import loadOTSModel, retrieveDataloader
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -68,7 +68,7 @@ def editableTrainLoop(
             
             ent_tokens = ent[0].flatten()
             ent_tokens = ent_tokens[ent_tokens != 50256]
-            edit_locs = locateEntityEdit(edit_tokens, ent_tokens)
+            edit_locs = utils.locateSubset(edit_tokens, ent_tokens)
             if edit_locs.size == 0:
                 print(f"Unable to locate edit on TS {train_step}")
                 # torch.save(edit_tokens, f"{errpath}/edit_tokens_{train_step}")
@@ -249,7 +249,7 @@ def editableSelfSampling(
             
             ent_tokens = ent[0].flatten()
             ent_tokens = ent_tokens[ent_tokens != 50256]
-            edit_locs = utils.locateEntityEdit(edit_example[0], ent_tokens)
+            edit_locs = utils.locateSubset(edit_example[0], ent_tokens)
             if edit_locs.size == 0 or edit_locs.min() == 0:
                 continue
             

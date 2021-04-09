@@ -179,7 +179,7 @@ class EditTrainer(BaseTrainer):
                 
                 ent_tokens = ent[0].flatten()
                 ent_tokens = ent_tokens[ent_tokens != 50256]
-                edit_locs = utils.locateEntityEdit(edit_tokens, ent_tokens)
+                edit_locs = utils.locateSubset(edit_tokens, ent_tokens)
                 if edit_locs.size == 0:
                     print(f"Unable to locate edit on TS {train_step}")
                     #if not os.path.exists("{self.errpath}"):
@@ -343,14 +343,17 @@ class SelfSampleTrainer(EditTrainer):
                 
                 ent_tokens = ent[0].flatten()
                 ent_tokens = ent_tokens[ent_tokens != 50256]
-                edit_locs = utils.locateEntityEdit(edit_example[0], ent_tokens)
-                if edit_locs.size == 0 or edit_locs.min() < 10:
-                    skip_count += 1
-                    continue
+                edit_locs = utils.locateSubset(edit_example[0], ent_tokens)
+                
                 if train_step % 50 == 0:
                     print(f"SKIPCOUNT: {skip_count}")
-                    
-                edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens, edit_locs)
+                
+                lm_start = utils.locateSubset(lm_tokens, edit_example[0])
+                lm_locs = lm_start.min().item() + edit_locs
+                if lm_locs.size == 0 or lm_locs.min() < 10:
+                    skip_count += 1
+                    continue
+                edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens, lm_locs)
                 
                 param_groups = [
                     {'params': p, 'lr': None} 

@@ -12,7 +12,6 @@ import higher
 
 import utils
 from data_process import TorchDataset
-from utils import loadTrainedModel, retrieveDataloader, loadOTSModel, locateEntityEdit
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -167,20 +166,18 @@ def evalSequentialEdits(
             ent_tokens = ent[0].flatten() #1d array of vocab indexes
             ent_tokens = ent_tokens[ent_tokens != 50256]
     
-            edit_locs = locateEntityEdit(edit_tokens, ent_tokens)
+            edit_locs = utils.locateSubset(edit_tokens, ent_tokens)
             if edit_locs.size == 0 or (edit_locs.min() < 10 & self_sample):
                 print(f"Skipping {train_step}")
                 continue
             
             if self_sample:
-                try:
-                    edit_tokens, edit_mask, edit_labels, gold_tokens = genModelText(
-                        finetuned, lm_tokens, edit_locs
-                        )
-                except RuntimeError:
-                    print(f"RTE on TS {train_step}")
-                    continue
-                        
+                lm_start = utils.locateSubset(lm_tokens, edit_tokens)
+                lm_locs = lm_start.min().item() + edit_locs
+                edit_tokens, edit_mask, edit_labels, gold_tokens = genModelText(
+                    finetuned, lm_tokens, lm_locs
+                    )
+                
                 gold_tokens = gold_tokens.cpu()
             else:
                 edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
@@ -376,13 +373,13 @@ if __name__ == "__main__":
     loc = utils.sailPreprocess()
 
     if args.model_path: 
-        model, tokenizer = loadTrainedModel(args.model_path, cache_dir=loc)
+        model, tokenizer = utils.loadTrainedModel(args.model_path, cache_dir=loc)
     else:
-        model_ots, tokenizer = loadOTSModel(cache_dir=loc)
+        model_ots, tokenizer = utils.loadOTSModel(cache_dir=loc)
     if args.test_set:
-        dataloader = retrieveDataloader(tokenizer, bs=1, data_loc=loc, dataset='test', max_obs=200)
+        dataloader = utils.retrieveDataloader(tokenizer, bs=1, data_loc=loc, dataset='test', max_obs=200)
     else:
-        dataloader = retrieveDataloader(tokenizer, bs=1, data_loc=loc, dataset='valid', max_obs=100, shuffle=True)
+        dataloader = utils.retrieveDataloader(tokenizer, bs=1, data_loc=loc, dataset='valid', max_obs=100, shuffle=True)
 
     if args.model_path:
         evalSequentialEdits(

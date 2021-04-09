@@ -57,13 +57,21 @@ def loadTrainedModel(modelPath, cache_dir=None, tokenizer=True):
         return model
     return model, tok
 
-def locateEntityEdit(edit_tokens, ent_tokens):
-    return np.argwhere(
-        np.in1d(
-            edit_tokens.numpy(), 
-            ent_tokens.numpy()
-            )
-        ).flatten()
+def locateSubset(whole, subset):
+    start = subset[0]
+    len_sub = len(subset)
+    locs = np.where(whole == start)[0]
+    empty = torch.tensor([])
+
+    for loc in list(locs):
+        whole_slice = whole[loc:(loc+len_sub)]
+        if len(subset) != len(whole_slice):
+            return empty
+        if torch.all(subset == whole_slice):
+            sub_loc = torch.tensor(range(loc,(loc+len_sub)))
+            return sub_loc
+
+    return empty
 
 
 def sailPreprocess(debug=False):
