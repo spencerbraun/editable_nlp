@@ -48,9 +48,14 @@ class BaseTrainer:
             )
         self.epoch = 0
 
-    def saveModel(self, model, train_step, name="model"):
+    def saveModel(self, model, train_step, name="model", final=False):
         if not self.config.debug:
-            if (train_step > 0) & (train_step % self.config.model_save_pt == 0):
+            if final:
+                torch.save(
+                    self.model.state_dict(), 
+                    self.modelpath(name, self.epoch, 9999)
+                    )
+            elif (train_step > 0) & (train_step % self.config.model_save_pt == 0):
                 torch.save(
                     self.model.state_dict(), 
                     self.modelpath(name, self.epoch, train_step)
@@ -256,13 +261,13 @@ class EditTrainer(BaseTrainer):
                     }
                 self.echo(train_step, **loss_dict)
                 self.tensorBoard(global_iter, **loss_dict)
-                self.saveModel(self.model, train_step)
+                self.saveModel(self.model, global_iter, name='editable')
 
             if (train_step % 1000 == 0) & (not self.config.debug):
                 self.validateEditTraining()
 
         
-        self.saveModel(self.model, train_step)
+        self.saveModel(self.model, train_step, final=True, name='editable')
         self.writer.flush()
 
 
@@ -427,9 +432,9 @@ class SelfSampleTrainer(EditTrainer):
                     }
                 self.echo(train_step, **loss_dict)
                 self.tensorBoard(global_iter, **loss_dict)
-                self.saveModel(self.model, train_step)
+                self.saveModel(self.model, global_iter, name="self_sample")
         
-        self.saveModel(self.model, train_step)
+        self.saveModel(self.model, train_step, final=True, name="self_sample")
         self.writer.flush()
 
 if __name__ == "__main__":
