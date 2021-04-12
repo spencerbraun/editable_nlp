@@ -201,12 +201,6 @@ def evalSequentialEdits(
                 edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
                 
                 gold_tokens = ent_tokens.cpu()
-
-            
-            print(f"lm_tokens:: {decode(lm_tokens, tokenizer}")
-            print(f"edit_tokens:: {decode(edit_tokens, tokenizer}")
-            print(f"gold_tokens:: {decode(gold_tokens, tokenizer}")
-            import ipdb; ipdb.set_trace()
             
 
             orig_logits, orig_prob = getIndexedProbs(
@@ -385,6 +379,90 @@ class ModelComps:
             plt.ylabel("", fontsize='large')
             plt.show()
 
+def evalSingleEdits(
+    model, 
+    dataloader,
+    model_name, 
+    n_edit_steps,
+    loc="..",
+    testset=False
+    ):
+    
+    outcomes = []
+    
+    model.to(DEVICE)
+    timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
+    filename = f"edit_success_{timestamp}_{os.path.basename(model_name)}"
+    n_edits = 0
+    saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}" 
+    with open(saveloc, "w") as f:
+        f.write((
+            "train_step,n_edit_steps,success,success_diff,"
+            "new_logits,orig_logits,new_ppl,orig_ppl,new_prob,old_prob\n"
+            ))
+        for train_step, (lm_data, edit_example, ent) in enumerate(dataloader):
+            edit_tokens, edit_mask = edit_example
+            ent_tokens = ent[0].flatten() #1d array of vocab indexes
+            ent_tokens = ent_tokens[ent_tokens != 50256]
+    
+            try:
+                edit_locs = locateEntityEdit(edit_tokens, ent_tokens)
+            except:
+                print(f"Error on step {train_step}, continuing")
+                continue
+
+            edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
+            edit_labels = edit_tokens.masked_fill(edit_mask == 0, -100) 
+            edit_labels.to(DEVICE)
+            
+            gold_tokens = ent_tokens.cpu()
+            
+            orig_logits, orig_prob = getIndexedProbs(
+                model, 
+                edit_locs, 
+                gold_tokens, 
+                edit_tokens, 
+                edit_mask, 
+                edit_labels
+                )
+            orig_ppl = perplexity(model, dataloader)
+
+            model_out = performOneEdit(
+                model, 
+                edit_example, 
+                edit_locs,
+                n_edit_steps=n_edit_steps, 
+                lr=1e-3
+                )
+                    
+            new_logits, new_prob = getIndexedProbs(
+                model_out, 
+                edit_locs, 
+                gold_tokens, 
+                edit_tokens, 
+                edit_mask, 
+                edit_labels
+                )
+            new_ppl = perplexity(model_out, dataloader)
+
+            success = new_logits > orig_logits
+            success_diff = orig_logits - new_logits
+
+            run = (
+                train_step, n_edit_steps, success, success_diff, 
+                new_logits, orig_logits, new_ppl, orig_ppl, new_prob, orig_prob
+                )
+            outcomes.append(run)
+            form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
+            writeStr = ",".join([form(x) for x in run])
+            f.write(f"{writeStr}\n")
+
+            n_edits +=1 
+            if n_edits >= 100:
+                break
+        
+    success_pct = sum([x[1] for x in outcomes]) / len(outcomes)
+    return success_pct, outcomes
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -407,14 +485,22 @@ if __name__ == "__main__":
         dataloader = utils.retrieveDataloader(tokenizer, bs=1, data_loc=loc, dataset='valid')
 
     if args.model_path:
-        evalSequentialEdits(
+        # evalSequentialEdits(
+        #     model, 
+        #     dataloader, 
+        #     tokenizer,
+        #     args.model_path, 
+        #     int(args.edit_steps),
+        #     loc=loc,
+        #     self_sample=args.self_sample,
+        #     testset=args.test_set
+        #     )
+        evalSingleEdits(
             model, 
             dataloader, 
-            tokenizer,
             args.model_path, 
             int(args.edit_steps),
             loc=loc,
-            self_sample=args.self_sample,
             testset=args.test_set
             )
 
