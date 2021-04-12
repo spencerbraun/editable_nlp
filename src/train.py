@@ -294,8 +294,9 @@ class SelfSampleTrainer(EditTrainer):
         output_sequence = self.finetuned.generate(
             input_ids=input_ids,
             max_length=input_size + 5,
-            temperature=0.7,
+            temperature=1.2,
             do_sample=True,
+            repetition_penalty=5.0,
             num_return_sequences=10,
         )
 

@@ -103,8 +103,8 @@ def genModelText(finetuned, lm_tokens, edit_locs):
         output_sequence = finetuned.generate(
             input_ids=input_ids,
             max_length=input_size + 5,
-            temperature=0.7,
-            repetition_penalty=1.0,
+            temperature=1.2,
+            repetition_penalty=5.0,
             do_sample=True,
             num_return_sequences=10,
         )
