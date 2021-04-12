@@ -166,6 +166,12 @@ class EditTrainer(BaseTrainer):
         global_iter = 0
         print("Starting Training")
 
+        lrs = [
+            torch.nn.Parameter(torch.tensor(self.config.inner_lr)) 
+            for p in self.model.transformer.h[-3:].parameters()
+            ]
+        lr_opt = torch.optim.Adam(lrs, lr=1e-2)
+
         for epoch in range(self.config.epochs):
             self.epoch = epoch
             
@@ -192,15 +198,23 @@ class EditTrainer(BaseTrainer):
                 edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
                 edit_labels = edit_labels.to(self.device)
                 edit_tokens, edit_mask = edit_tokens.to(self.device), edit_mask.to(self.device)
-                
-                inner_opt = torch.optim.SGD(
-                    self.model.transformer.h[-3:].parameters(), 
-                    lr=self.config.inner_lr
+
+                param_groups = [
+                    {'params': p, 'lr': None} 
+                    for p in self.model.transformer.h[-3:].parameters()
+                    ]
+                inner_opt = (
+                    torch.optim.SGD(param_groups) if self.config.learnable_lr
+                    else torch.optim.SGD(
+                        self.model.transformer.h[-3:].parameters(), 
+                        lr=self.config.inner_lr
+                        )
                     )
 
                 with higher.innerloop_ctx(
                     self.model, 
                     inner_opt, 
+                    override={'lr': lrs} if self.config.learnable_lr else None,
                     copy_initial_weights=False, 
                     track_higher_grads=True
                     ) as (fmodel, diffopt):
@@ -252,6 +266,10 @@ class EditTrainer(BaseTrainer):
                 if train_step % 5 == 0:
                     opt.step()
                     opt.zero_grad()
+
+                    if self.config.learnable_lr:
+                        lr_opt.step()
+                        lr_opt.zero_grad()
                 
                 global_iter += 1
                 
@@ -263,9 +281,8 @@ class EditTrainer(BaseTrainer):
                 self.tensorBoard(global_iter, **loss_dict)
                 self.saveModel(self.model, global_iter, name='editable')
 
-            if (train_step % 1000 == 0) & (not self.config.debug):
-                self.validateEditTraining()
-
+            # if (train_step % 1000 == 0) & (not self.config.debug):
+            #     self.validateEditTraining()
         
         self.saveModel(self.model, train_step, final=True, name='editable')
         self.writer.flush()

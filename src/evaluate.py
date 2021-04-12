@@ -20,6 +20,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 from IPython.display import display
 
+from model_comps import decode
+
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def perplexity(model, dataloader):
@@ -126,6 +128,7 @@ def genModelText(finetuned, lm_tokens, edit_locs):
 def evalSequentialEdits(
     model, 
     dataloader, 
+    tokenizer,
     model_name, 
     n_edit_steps,
     loc="..",
@@ -200,6 +203,12 @@ def evalSequentialEdits(
                 gold_tokens = ent_tokens.cpu()
 
             
+            print(f"lm_tokens:: {decode(lm_tokens, tokenizer}")
+            print(f"edit_tokens:: {decode(edit_tokens, tokenizer}")
+            print(f"gold_tokens:: {decode(gold_tokens, tokenizer}")
+            import ipdb; ipdb.set_trace()
+            
+
             orig_logits, orig_prob = getIndexedProbs(
                 model, 
                 edit_locs, 
@@ -401,6 +410,7 @@ if __name__ == "__main__":
         evalSequentialEdits(
             model, 
             dataloader, 
+            tokenizer,
             args.model_path, 
             int(args.edit_steps),
             loc=loc,
@@ -408,12 +418,12 @@ if __name__ == "__main__":
             testset=args.test_set
             )
 
-    if args.ots:
-        evalSequentialEdits(
-            model_ots, 
-            dataloader, 
-            "OTS", 
-            int(args.edit_steps),
-            loc=loc,
-            testset=args.test_set
-            )
+    # if args.ots:
+    #     evalSequentialEdits(
+    #         model_ots, 
+    #         dataloader, 
+    #         "OTS", 
+    #         int(args.edit_steps),
+    #         loc=loc,
+    #         testset=args.test_set
+    #         )
