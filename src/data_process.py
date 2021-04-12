@@ -14,6 +14,7 @@ import torch.nn.functional as F
 import spacy
 from datasets import load_dataset, list_metrics, load_metric
 
+import utils
 
 def is_ascii(s):
     return all(ord(c) < 128 for c in s)
@@ -22,7 +23,7 @@ def filterText(iterator):
 
     valid  = []
     for text in iterator:
-        if len(text) < 50:
+        if len(text) < 100:
             continue
         if not is_ascii(text):
             continue
@@ -36,13 +37,11 @@ class DataProcessor:
     def __init__(
         self, 
         text, 
-        write_dir=None, 
-        parallel=False
+        write_dir=None
     ):
         self.text = text
 
         self.write_dir = write_dir
-        self.parallel = parallel
         
         self.raw_texts = []
         self.ner_texts = []
@@ -57,27 +56,15 @@ class DataProcessor:
         )
         self.model.add_pipe('sentencizer')
         
-        self.keep_ents = ['PERSON', 'ORG', 'GPE']
+        self.keep_ents = ['PERSON']
         
-    @classmethod
-    def fromFile(cls, file_loc):
-        pass
-    
-    
+   
     def run(self, func, args):
-        if self.parallel:
-            with ProcessPoolExecutor() as executor:
-                for output in executor.map(func, args):
-                    return output.result(timeout=None)
-        else:
-            for output in func(*args):
-                yield output
-            
-    
+        for output in func(*args):
+            yield output
     
     def permuteEnts(self):
         timestamp = time.time()
-        
             
         for idx, (sent, ents) in enumerate(self.ner_texts):
             
@@ -113,7 +100,6 @@ class DataProcessor:
             self.permuted.append(new_sent)
             self.changed_ents.append((orig_ent[0], replace_ent))
             
-    
     
     def processEnts(self):
                 
@@ -260,10 +246,18 @@ if __name__ == "__main__":
     help='')                        
 
     args = parser.parse_args()
+    loc = utils.sailPreprocess()
+    data_loc = f"{loc}/new_data"
 
     if args.train:
         print("generating training set")
-        generateDataset('../data', set='train', pct='100')
+        generateDataset(
+            data_loc, 
+            process=True,
+            sample=int(2e6),
+            set='train', 
+            pct='100'
+            )
     
     if args.valid:
         print("generating eval set")

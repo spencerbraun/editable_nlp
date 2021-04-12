@@ -3,7 +3,10 @@ import copy
 import argparse
 import os
 from datetime import datetime
+
+import glob
 import numpy as np
+import pandas as pd
 
 import torch
 import torch.nn as nn
@@ -262,6 +265,7 @@ class ModelComps:
         self.models = {}
         self.modelStats = self.getModelParams()
         self.stats = {}
+        self.globs = []
     
     
     def getModelParams(self):
@@ -286,10 +290,11 @@ class ModelComps:
         elif self.test:
             eval_glob = glob.glob(f"{self.loc}/eval/test/*{model_name}")
         else:
-            eval_glob = glob.glob(f"{self.loc}/*{model_name}")
+            eval_glob = glob.glob(f"{self.loc}/eval/*{model_name}")
         for evaluation in eval_glob:
+            self.globs.append(evaluation)
             df = pd.read_csv(evaluation)
-            eval_id = f"{kind}_{evaluation.split('.')[4].split('_')[0]}"
+            eval_id = f"{kind}_{evaluation.split('.')[5].split('_')[0]}"
             self.models[eval_id] = df
     
     def runStats(self):
@@ -345,6 +350,7 @@ class ModelComps:
         display(self.modelStats)
         
         print("Success Metrics")
+        
         stats_df = (
             pd.DataFrame(self.stats).T
             .reset_index()

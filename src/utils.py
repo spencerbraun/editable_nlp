@@ -20,6 +20,14 @@ def loadOTSModel(cache_dir=None):
 
     return model, tokenizer
 
+def loadTokenizer(cache_dir=None):
+    tokenizer = GPT2Tokenizer.from_pretrained(
+        'gpt2', cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        )
+    tokenizer.pad_token = tokenizer.eos_token
+
+    return tokenizer
+
 def retrieveDataloader(
     tokenizer, 
     bs=10, 
