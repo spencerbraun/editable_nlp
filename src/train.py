@@ -14,6 +14,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 import utils
 from config import TrainConfig, EditConfig, SelfSampleConfig
+from model_comps import decode
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -186,7 +187,7 @@ class EditTrainer(BaseTrainer):
                 ent_tokens = ent[0].flatten()
                 ent_tokens = ent_tokens[ent_tokens != 50256]
                 edit_locs = utils.locateSubset(edit_tokens, ent_tokens)
-                if edit_locs.size == 0:
+                if edit_locs.nelement() == 0:
                     print(f"Unable to locate edit on TS {train_step}")
                     #if not os.path.exists("{self.errpath}"):
                         #os.mkdir("{self.errpath}")
@@ -289,7 +290,7 @@ class EditTrainer(BaseTrainer):
 
 
 class SelfSampleTrainer(EditTrainer):
-    def __init__(self, config, dataloader, model_path=None):
+    def __init__(self, config, dataloader, tokenizer, model_path=None):
         super().__init__(config, dataloader, model_path) 
         
         self.finetuned = utils.loadTrainedModel(
@@ -299,6 +300,7 @@ class SelfSampleTrainer(EditTrainer):
         )
         self.finetuned.eval()
         self.finetuned.to(self.device)
+        self.tokenizer = tokenizer
         
     def genModelText(self, lm_tokens, edit_locs):
         
@@ -353,14 +355,10 @@ class SelfSampleTrainer(EditTrainer):
         for epoch in range(self.config.epochs):
             self.epoch = epoch
             
-            for train_step, (lm_data, edit_example, new_ent, old_ent) in enumerate(self.data):
+            for train_step, (lm_data, _, _, old_ent) in enumerate(self.data):
                 lm_tokens, lm_mask = lm_data
                 orig_ent_tokens = old_ent[0].flatten()
                 orig_ent_tokens = orig_ent_tokens[orig_ent_tokens != 50256]
-
-                edit_tokens, edit_mask = edit_example
-                ent_tokens = new_ent[0].flatten() #1d array of vocab indexes
-                ent_tokens = ent_tokens[ent_tokens != 50256]
 
                 edit_locs = utils.locateSubset(lm_tokens, orig_ent_tokens)
                 
@@ -373,7 +371,10 @@ class SelfSampleTrainer(EditTrainer):
                 if edit_locs.nelement() == 0 or (edit_locs.min() < 10):
                     skip_count += 1
                     continue
+                import ipdb; ipdb.set_trace()
                 edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens, edit_locs)
+                print(f"LM Tokens:: {decode(lm_tokens, self.tokenizer)}\n")
+                print(f"Edit Tokens:: {decode(edit_tokens, self.tokenizer)}\n")
                 
                 param_groups = [
                     {'params': p, 'lr': None} 
@@ -470,9 +471,8 @@ if __name__ == "__main__":
     
     loc = utils.sailPreprocess()
 
-    model_del, tokenizer = utils.loadOTSModel(cache_dir=loc)
+    tokenizer = utils.loadTokenizer(cache_dir=loc)
     tokenizer.pad_token = tokenizer.eos_token
-    del model_del
 
     dataloader = utils.retrieveDataloader(
         tokenizer, 
@@ -494,7 +494,7 @@ if __name__ == "__main__":
     elif args.self_sample:
         config = SelfSampleConfig()
         config.write_loc = loc
-        trainer = SelfSampleTrainer(config, dataloader)
+        trainer = SelfSampleTrainer(config, dataloader, tokenizer)
     
     else:
         raise AttributeError("Must specify train arg")

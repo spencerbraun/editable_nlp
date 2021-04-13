@@ -128,7 +128,7 @@ def genModelText(finetuned, lm_tokens, edit_locs):
 def evalSequentialEdits(
     model, 
     dataloader, 
-    tokenizer,
+    #tokenizer,
     model_name, 
     n_edit_steps,
     loc="..",
@@ -201,6 +201,10 @@ def evalSequentialEdits(
                 edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
                 
                 gold_tokens = ent_tokens.cpu()
+        #    print(f"lm_tokens:: {decode(lm_tokens, tokenizer)}")
+       #     print(f"edit_tokens:: {decode(edit_tokens, tokenizer)}")
+      #      print(f"gold_tokens:: {decode(gold_tokens, tokenizer)}")
+     #       import ipdb; ipdb.set_trace()
             
 
             orig_logits, orig_prob = getIndexedProbs(
@@ -400,13 +404,13 @@ def evalSingleEdits(
             "train_step,n_edit_steps,success,success_diff,"
             "new_logits,orig_logits,new_ppl,orig_ppl,new_prob,old_prob\n"
             ))
-        for train_step, (lm_data, edit_example, ent) in enumerate(dataloader):
+        for train_step, (lm_data, edit_example, ent, _) in enumerate(dataloader):
             edit_tokens, edit_mask = edit_example
             ent_tokens = ent[0].flatten() #1d array of vocab indexes
             ent_tokens = ent_tokens[ent_tokens != 50256]
     
             try:
-                edit_locs = locateEntityEdit(edit_tokens, ent_tokens)
+                edit_locs = utils.locateSubset(edit_tokens, ent_tokens)
             except:
                 print(f"Error on step {train_step}, continuing")
                 continue
@@ -429,8 +433,9 @@ def evalSingleEdits(
 
             model_out = performOneEdit(
                 model, 
-                edit_example, 
-                edit_locs,
+                edit_tokens,
+                edit_mask,
+                edit_labels,
                 n_edit_steps=n_edit_steps, 
                 lr=1e-3
                 )

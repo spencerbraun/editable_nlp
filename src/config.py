@@ -19,8 +19,8 @@ class EditConfig:
         self.epochs = 1
         self.max_training_samps = 1.5e4
         self.n_edit_steps = 1
-        self.cedit = 1
-        self.cloc = 10
+        self.cedit = 0.5
+        self.cloc = 5
         self.learnable_lr = True
 
         self.debug = False
@@ -41,7 +41,7 @@ class SelfSampleConfig:
         self.cloc = 10
         self.learnable_lr = True
 
-        self.debug = False
+        self.debug = True
         self.model_save_pt = 5000
         self.write_loc = '..'
 
