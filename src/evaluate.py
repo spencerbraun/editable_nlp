@@ -79,7 +79,7 @@ def loadLr(model_path):
 
 def performOneEdit(
     model, 
-    model_path,
+    lrs,
     edit_tokens,
     edit_mask,
     edit_labels,
@@ -89,10 +89,12 @@ def performOneEdit(
     
     model.train()
     model_ = copy.deepcopy(model)
-    lrs, lr_opt = loadLr(model_path)
-    inner_opt = (
-        torch.optim.SGD(lr_opt['param_groups'])
-    )
+    param_groups = [
+        {'params': p, 'lr': None} 
+        for p in model.transformer.h[-3:].parameters()
+    ]
+    inner_opt = (torch.optim.SGD(param_groups))
+    
     print("starting edit")
     with higher.innerloop_ctx(
         model, 
@@ -171,9 +173,12 @@ def evalSequentialEdits(
     model.to(DEVICE)
     n_edits = 0
     saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}" 
+    
+    lrs, lr_opt = loadLr(model_name)
+
     with open(saveloc, "w") as f:
         f.write((
-            "train_step,n_edit_steps,edit_number,success,success_diff,"
+            "train_step,n_edit_steps,success,success_diff,"
             "new_logits,orig_logits,new_ppl,orig_ppl,new_prob,old_prob\n"
             ))
         for train_step, (lm_data, edit_example, new_ent, old_ent) in enumerate(dataloader):
@@ -224,7 +229,7 @@ def evalSequentialEdits(
 
             model_out = performOneEdit(
                 model,
-                model_name,
+                lrs,
                 edit_tokens, 
                 edit_mask, 
                 edit_labels,
@@ -246,7 +251,7 @@ def evalSequentialEdits(
             success_diff = orig_logits - new_logits
 
             run = (
-                train_step, n_edit_steps, edit_number, success, success_diff, 
+                train_step, n_edit_steps, success, success_diff, 
                 new_logits, orig_logits, new_ppl, orig_ppl, new_prob, orig_prob
                 )
 
