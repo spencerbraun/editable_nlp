@@ -203,14 +203,23 @@ class TorchDataset(torch.utils.data.Dataset):
 def generateDataset(
     writeDir, 
     process=True,
-    sample=int(1e5),
+    sample=int(1e6),
     set='train', 
     pct='10'
     ):
+
+    data_loc = f"{writeDir}/data/{set}"
+    if not os.path.exists(data_loc):
+        os.mkdir(data_loc)
+
+    wiki_loc = f"{writeDir}/wikitext"
+    if not os.path.exists(wiki_loc):
+        os.mkdir(wiki_loc)
+
     wikitext = load_dataset(
             'wikitext', 
             'wikitext-103-raw-v1', 
-            # cache_dir="/Volumes/External HD/Dev/datasets/wikitext", 
+            cache_dir=wiki_loc, 
             split=f'{set}[:{pct}%]'
         )
 
@@ -222,7 +231,7 @@ def generateDataset(
         passage_idxs = random.sample(range(1, wiki_len), sample)
     res_list = list(itemgetter(*passage_idxs)(wikitext['text'])) 
     sampleText = filterText(res_list)
-    dp = DataProcessor(sampleText, write_dir=writeDir)
+    dp = DataProcessor(sampleText, write_dir=data_loc)
 
     if process:
         print("running processor")
@@ -236,23 +245,18 @@ def generateDataset(
 
 if __name__ == "__main__":
     
-
     parser = argparse.ArgumentParser()
-    parser.add_argument('--train', action='store_true', default=False,
-                        help='')
-    parser.add_argument('--valid', action='store_true', default=False,
-                        help='')  
-    parser.add_argument('--test', action='store_true', default=False,
-    help='')                        
-
+    parser.add_argument('--train', action='store_true', default=False)
+    parser.add_argument('--valid', action='store_true', default=False)  
+    parser.add_argument('--test', action='store_true', default=False)                        
     args = parser.parse_args()
+
     loc = utils.sailPreprocess()
-    data_loc = f"{loc}/new_data"
 
     if args.train:
         print("generating training set")
         generateDataset(
-            data_loc, 
+            loc, 
             process=True,
             sample=int(2e6),
             set='train', 
@@ -262,7 +266,7 @@ if __name__ == "__main__":
     if args.valid:
         print("generating eval set")
         generateDataset(
-            '../data/valid', 
+            loc, 
             sample=int(5e4), 
             set='validation', 
             pct='100'
@@ -271,7 +275,7 @@ if __name__ == "__main__":
     if args.test:
         print("generating test set")
         generateDataset(
-            '../data/test', 
+            loc, 
             sample=int(1e6), 
             set='test', 
             pct='100'

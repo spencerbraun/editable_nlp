@@ -44,5 +44,6 @@ class SelfSampleConfig:
         self.debug = True
         self.model_save_pt = 5000
         self.write_loc = '..'
+        self.ft_model_name = "gpt2_epoch0_ts10000.20210408.09.04.1617899457"
 
         self.silent = False

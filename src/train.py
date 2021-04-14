@@ -14,7 +14,6 @@ from torch.utils.tensorboard import SummaryWriter
 
 import utils
 from config import TrainConfig, EditConfig, SelfSampleConfig
-from model_comps import decode
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -36,7 +35,7 @@ class BaseTrainer:
         self.timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
         self.hyperspath = f"{self.model_dir}/hypers.{self.timestamp}"
         self.errpath = f"{self.config.write_loc}/errors/errors_{self.timestamp}"
-        self.modelpath = (
+        self.statepath = (
             lambda model, epoch, step: 
             f"{self.model_dir}/{model}_epoch{epoch}_ts{step}.{self.timestamp}"
             )
@@ -49,17 +48,18 @@ class BaseTrainer:
             )
         self.epoch = 0
 
-    def saveModel(self, model, train_step, name="model", final=False):
+    def saveState(self, state_obj, train_step, name="finetune", final=False):
         if not self.config.debug:
+            out_obj = state_obj.state_dict() if hasattr(state_obj, "state_dict") else state_obj
             if final:
                 torch.save(
-                    self.model.state_dict(), 
-                    self.modelpath(name, self.epoch, 9999)
+                    out_obj, 
+                    self.statepath(name, self.epoch, 9999)
                     )
             elif (train_step > 0) & (train_step % self.config.model_save_pt == 0):
                 torch.save(
-                    self.model.state_dict(), 
-                    self.modelpath(name, self.epoch, train_step)
+                    out_obj, 
+                    self.statepath(name, self.epoch, train_step)
                     )
 
     def echo(self, train_step, **kwargs):
@@ -113,10 +113,10 @@ class BaseTrainer:
                 global_iter += 1
                 self.echo(train_step, **{"l_base": l_base})
                 self.tensorBoard(global_iter, **{"l_base": l_base})
-                self.saveModel(self.model, train_step, "gpt2")
+                self.saveState(self.model, train_step, "gpt2")
 
         
-        self.saveModel(self.model, train_step)
+        self.saveState(self.model, train_step)
         self.writer.flush()
 
 
@@ -189,10 +189,10 @@ class EditTrainer(BaseTrainer):
                 edit_locs = utils.locateSubset(edit_tokens, ent_tokens)
                 if edit_locs.nelement() == 0:
                     print(f"Unable to locate edit on TS {train_step}")
-                    #if not os.path.exists("{self.errpath}"):
-                        #os.mkdir("{self.errpath}")
-                    #torch.save(edit_tokens, f"{self.errpath}/edit_tokens_{train_step}")
-                    #torch.save(ent_tokens, f"{self.errpath}/ent_tokens_{train_step}")
+                    if not os.path.exists(f"{self.errpath}"):
+                        os.mkdir(f"{self.errpath}")
+                    torch.save(edit_tokens, f"{self.errpath}/edit_tokens_{train_step}")
+                    torch.save(ent_tokens, f"{self.errpath}/ent_tokens_{train_step}")
                     continue
                 
                 edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
@@ -280,31 +280,33 @@ class EditTrainer(BaseTrainer):
                     }
                 self.echo(train_step, **loss_dict)
                 self.tensorBoard(global_iter, **loss_dict)
-                self.saveModel(self.model, global_iter, name='editable')
+                self.saveState(self.model, global_iter, name='editable')
+                if self.config.learnable_lr:
+                    self.saveState(lr_opt, global_iter, name='lr')
 
             # if (train_step % 1000 == 0) & (not self.config.debug):
             #     self.validateEditTraining()
         
-        self.saveModel(self.model, train_step, final=True, name='editable')
+        self.saveState(self.model, global_iter, final=True, name='editable')
+        if self.config.learnable_lr:
+            self.saveState(lr_opt, global_iter, final=True, name='lr')
         self.writer.flush()
 
 
 class SelfSampleTrainer(EditTrainer):
-    def __init__(self, config, dataloader, tokenizer, model_path=None):
+    def __init__(self, config, dataloader, model_path=None):
         super().__init__(config, dataloader, model_path) 
         
         self.finetuned = utils.loadTrainedModel(
-            f"{self.config.write_loc}/models/finetune/gpt2_epoch0_ts10000.20210408.09.04.1617899457", 
+            f"{self.config.write_loc}/models/finetune/{self.config.ft_model_name}", 
             cache_dir=self.config.write_loc,
             tokenizer=False
         )
         self.finetuned.eval()
         self.finetuned.to(self.device)
-        self.tokenizer = tokenizer
         
     def genModelText(self, lm_tokens, edit_locs):
         
-
         input_ids = lm_tokens[:, :edit_locs.min()]
         input_size = input_ids.size()[-1]
         
@@ -371,10 +373,8 @@ class SelfSampleTrainer(EditTrainer):
                 if edit_locs.nelement() == 0 or (edit_locs.min() < 10):
                     skip_count += 1
                     continue
-                import ipdb; ipdb.set_trace()
+                
                 edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens, edit_locs)
-                print(f"LM Tokens:: {decode(lm_tokens, self.tokenizer)}\n")
-                print(f"Edit Tokens:: {decode(edit_tokens, self.tokenizer)}\n")
                 
                 param_groups = [
                     {'params': p, 'lr': None} 
@@ -455,10 +455,17 @@ class SelfSampleTrainer(EditTrainer):
                     "l_loc": l_loc, "total": total_loss
                     }
                 self.echo(train_step, **loss_dict)
+                loss_dict.update({f"lr{i}":lr.data.item() for i, lr in enumerate(lrs)})
                 self.tensorBoard(global_iter, **loss_dict)
-                self.saveModel(self.model, global_iter, name="self_sample")
+                self.saveState(self.model, global_iter, name="self_sample")
+                if self.config.learnable_lr:
+                    self.saveState(lr_opt, global_iter, name='lr_opt')
+                    self.saveState(lrs, global_iter, name='lr')
         
-        self.saveModel(self.model, train_step, final=True, name="self_sample")
+        self.saveState(self.model, global_iter, final=True, name="self_sample")
+        if self.config.learnable_lr:
+                self.saveState(lr_opt, global_iter, final=True, name='lr_opt')
+                self.saveState(lrs, global_iter, final=True, name='lr')
         self.writer.flush()
 
 if __name__ == "__main__":
@@ -466,7 +473,6 @@ if __name__ == "__main__":
     parser.add_argument('--editable', action='store_true')
     parser.add_argument('--finetune', action='store_true')
     parser.add_argument('--self_sample', action='store_true')
-    # parser.add_argument('--data_loc', default='..')
     args = parser.parse_args()
     
     loc = utils.sailPreprocess()
