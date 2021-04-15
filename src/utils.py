@@ -60,7 +60,7 @@ def wikiDataloader(
     tokenizer, 
     bs=10, 
     data_loc='..',
-    dataset='train'
+    dataset='train',
     shuffle=False,
     max_length=200,
     min_length=20
@@ -96,7 +96,7 @@ def wikiDataloader(
         collate_fn=pad_collate if bs > 1 else None
     )
 
-return dataloader
+    return dataloader
 
 
 def loadTrainedModel(modelPath, cache_dir=None, tokenizer=True):

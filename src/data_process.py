@@ -216,7 +216,7 @@ class WikitextDataset(torch.utils.data.Dataset):
         self,          
         tokenizer, 
         data_loc="..", 
-        set='train', 
+        dataset='train', 
         pct=100, 
         max_length=200,
         min_length=20
@@ -225,7 +225,7 @@ class WikitextDataset(torch.utils.data.Dataset):
             'wikitext', 
             'wikitext-103-raw-v1', 
             cache_dir=data_loc, 
-            split=f'{set}[:{pct}%]'
+            split=f'{dataset}[:{pct}%]'
         )
         self.tokenizer = tokenizer
         self.filtered = self.filterText(self.dataset['text'])
@@ -234,17 +234,13 @@ class WikitextDataset(torch.utils.data.Dataset):
         self.offset = 0
     
     @staticmethod
-    def is_ascii(s):
-        return all(ord(c) < 128 for c in s)
-
-    @staticmethod
     def filterText(iterator, min_len=100):
-
+        isascii = lambda s: all(ord(c) < 128 for c in s)
         valid  = []
         for text in iterator:
             if len(text) < min_len:
                 continue
-            if not self.is_ascii(text):
+            if not isascii(text):
                 continue
             valid.append(text)
 

@@ -308,14 +308,14 @@ class SelfSampleTrainer(EditTrainer):
     def genModelText(self, lm_tokens):
         
         lm_tokens = lm_tokens[lm_tokens != self.tokenizer.pad_token_id]
-        len_lm = lm_tokens.shape[1]
-        edit_loc = max(random.randint(len_lm*0.6, len_lm*0.8), 20)
-        input_ids = lm_tokens[:, :edit_loc]
+        len_lm = lm_tokens.shape[-1]
+        edit_loc = max(random.randint(int(len_lm*0.6), int(len_lm*0.9)), 15)
+        input_ids = lm_tokens[:edit_loc]
         input_size = input_ids.size()[-1]
         
         print("generating")
         output_sequence = self.finetuned.generate(
-            input_ids=input_ids,
+            input_ids=input_ids.unsqueeze(0),
             max_length=input_size + 5,
             temperature=1.2,
             do_sample=True,
@@ -468,11 +468,11 @@ if __name__ == "__main__":
     tokenizer = utils.loadTokenizer(cache_dir=loc)
 
     if args.self_sample:
-        dataloader = wikiDataloader(
+        dataloader = utils.wikiDataloader(
             tokenizer, 
             bs=args.bs, 
             data_loc=loc,
-            dataset='train'
+            dataset='train',
             shuffle=False,
             max_length=200,
             min_length=20
