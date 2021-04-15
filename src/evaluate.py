@@ -65,17 +65,15 @@ def loadLr(model_path):
     step = model_name.split("_")[-1].split(".")[0]
     dir_loc = os.path.dirname(model_path)
     lr_glob = glob.glob(f"{dir_loc}/lr_epoch0_{step}.*{model_id}")
-    lr_opt_glob = glob.glob(f"{dir_loc}/lr_opt_epoch0_{step}.*{model_id}")
+
     if len(lr_glob) > 1:
         raise AttributeError("Too many lr specifications", ",".join(lr_glob))
     elif len(lr_glob) == 0:
         raise AttributeError("No lr specifications found")
     else:
-        lrs= torch.load(lr_glob[0])
-        lr_opt = torch.optim.Adam(lrs, lr=1e-2)
-        lr_opt.load_state_dict(torch.load(lr_opt_glob[0]))
+        lrs = torch.load(lr_glob[0])
 
-    return lrs, lr_opt
+    return lrs
 
 def performOneEdit(
     model, 
@@ -174,7 +172,7 @@ def evalSequentialEdits(
     n_edits = 0
     saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}" 
     
-    lrs, lr_opt = loadLr(model_name)
+    lrs = loadLr(model_name)
 
     with open(saveloc, "w") as f:
         f.write((

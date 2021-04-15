@@ -47,6 +47,8 @@ class DataProcessor:
         self.ner_texts = []
         self.permuted = []
         self.changed_ents = []
+
+        self.output_dict = {}
         
         self.ents = collections.defaultdict(list)
 
@@ -72,9 +74,9 @@ class DataProcessor:
                 if not os.path.exists(self.write_dir):
                     os.mkdir(self.write_dir)
                     print(f"Warning: {self.write_dir} does not exist. Creating...")
-                permuteFile = open(self.write_dir + f'/permuted_entities.{idx}', 'w')
-                origFile = open(self.write_dir + f'/original_entities.{idx}', 'w')
-                entFile = open(self.write_dir + f'/entity_swaps.{idx}', 'w')
+                # permuteFile = open(self.write_dir + f'/permuted_entities.{idx}', 'w')
+                # origFile = open(self.write_dir + f'/original_entities.{idx}', 'w')
+                # entFile = open(self.write_dir + f'/entity_swaps.{idx}', 'w')
 
             eligible = list(filter(lambda x: x[3] in self.keep_ents, ents))
             orig_ent = random.choice(eligible)
@@ -88,17 +90,25 @@ class DataProcessor:
             suffix = sent[end:]
             new_sent = prefix + replace_ent + suffix
 
-            if self.write_dir:
-                permuteFile.write(new_sent + "\n")
-                origFile.write(self.raw_texts[idx].strip('\n').strip(" ") + "\n")
-                entFile.write(f"{orig_ent[0]}|{replace_ent}\n")
+            # if self.write_dir:
+                # permuteFile.write(new_sent + "\n")
+                # origFile.write(self.raw_texts[idx].strip('\n').strip(" ") + "\n")
+                # entFile.write(f"{orig_ent[0]}|{replace_ent}\n")
 
-                permuteFile.close()
-                origFile.close()
-                entFile.close()
+                # permuteFile.close()
+                # origFile.close()
+                # entFile.close()
+
+            self.output_dict[idx] = {
+                'original': self.raw_texts[idx].strip('\n').strip(" "),
+                'edited': new_sent,
+                'entity': f"{orig_ent[0]}|{replace_ent}"
+            }
                 
             self.permuted.append(new_sent)
             self.changed_ents.append((orig_ent[0], replace_ent))
+        if self.write_dir:
+            torch.save(self.output_dict, self.write_dir + '/data_torch')
             
     
     def processEnts(self):
@@ -267,7 +277,7 @@ if __name__ == "__main__":
         print("generating eval set")
         generateDataset(
             loc, 
-            sample=int(5e4), 
+            sample=int(5e6), 
             set='validation', 
             pct='100'
             )
@@ -276,7 +286,7 @@ if __name__ == "__main__":
         print("generating test set")
         generateDataset(
             loc, 
-            sample=int(1e6), 
+            sample=int(5e6), 
             set='test', 
             pct='100'
             )
