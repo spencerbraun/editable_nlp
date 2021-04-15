@@ -210,6 +210,70 @@ class TorchDataset(torch.utils.data.Dataset):
         return raw, perm, new_ent_tok, old_ent_tok
 
 
+class WikitextDataset(torch.utils.data.Dataset):
+    def __init__(
+        self,          
+        tokenizer, 
+        data_loc="..", 
+        set='train', 
+        pct=100, 
+        max_length=200,
+        min_length=20
+    ):
+        self.dataset = load_dataset(
+            'wikitext', 
+            'wikitext-103-raw-v1', 
+            cache_dir=data_loc, 
+            split=f'{set}[:{pct}%]'
+        )
+        self.tokenizer = tokenizer
+        self.filtered = self.filterText(self.dataset['text'])
+        self.max_length = max_length
+        self.min_length = min_length
+        self.offset = 0
+    
+    @staticmethod
+    def is_ascii(s):
+        return all(ord(c) < 128 for c in s)
+
+    @staticmethod
+    def filterText(iterator, min_len=100):
+
+        valid  = []
+        for text in iterator:
+            if len(text) < min_len:
+                continue
+            if not self.is_ascii(text):
+                continue
+            valid.append(text)
+
+        return valid
+        
+        
+    def tokenize(self, text):
+
+        tok = self.tokenizer(
+            text,
+            truncation=True,
+            max_length=self.max_length
+        )
+        return tuple(map(torch.tensor, [tok['input_ids'],tok['attention_mask']]))
+
+    def __len__(self):
+        return len(self.filtered)
+
+    def __getitem__(self, index):
+        
+        while True:
+            id_ = index + self.offset
+            tokenized = self.tokenize(self.filtered[id_])
+            tok_ids, tok_mask = tokenized
+            if tok_ids.nelement() >= self.min_length:
+                break
+            self.offset += 1
+
+        return tokenized
+
 def generateDataset(
     writeDir, 
     process=True,

@@ -399,7 +399,7 @@ if __name__ == "__main__":
         model, tokenizer = utils.loadTrainedModel(args.model_path, cache_dir=loc)
 
     ds = 'test' if args.test_set else 'valid'
-    dataloader = utils.retrieveDataloader(tokenizer, bs=1, data_loc=loc, dataset=ds)
+    dataloader = utils.retrieveEditDataloader(tokenizer, bs=1, data_loc=loc, dataset=ds)
 
     if args.model_path:
         evalSequentialEdits(

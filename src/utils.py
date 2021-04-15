@@ -7,7 +7,7 @@ import glob
 import numpy as np
 import torch
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
-from data_process import TorchDataset
+from data_process import TorchDataset, WikitextDataset
 
 def loadOTSModel(cache_dir=None):
     model = GPT2LMHeadModel.from_pretrained(
@@ -28,7 +28,7 @@ def loadTokenizer(cache_dir=None):
 
     return tokenizer
 
-def retrieveDataloader(
+def retrieveEditDataloader(
     tokenizer, 
     bs=10, 
     data_loc='..',
@@ -55,6 +55,48 @@ def retrieveDataloader(
     )
 
     return dataloader
+
+def wikiDataloader(
+    tokenizer, 
+    bs=10, 
+    data_loc='..',
+    dataset='train'
+    shuffle=False,
+    max_length=200,
+    min_length=20
+    ):
+
+    def pad_collate(batch):
+        tokens = [x[0] for x in batch]
+        mask = [x[1] for x in batch]
+        tok_pad = torch.nn.utils.rnn.pad_sequence(
+            tokens, batch_first=True, 
+            padding_value=tokenizer.pad_token_id
+        )
+        mask_pad = torch.nn.utils.rnn.pad_sequence(
+            mask, batch_first=True, 
+            padding_value=0
+        )
+        return tok_pad, mask_pad
+
+    ds = WikitextDataset(
+        tokenizer, 
+        data_loc=data_loc, 
+        dataset=dataset,
+        pct=100, 
+        max_length=max_length,
+        min_length=min_length
+        )
+    dataloader = torch.utils.data.DataLoader(
+        ds,
+        batch_size=bs,
+        num_workers=2,
+        pin_memory=True,
+        shuffle=shuffle,
+        collate_fn=pad_collate if bs > 1 else None
+    )
+
+return dataloader
 
 
 def loadTrainedModel(modelPath, cache_dir=None, tokenizer=True):
@@ -98,12 +140,5 @@ def sailPreprocess(debug=False):
     os.mkdir(f"{save_loc}/spencerb/errors")
     os.mkdir(f"{save_loc}/spencerb/eval")
     os.mkdir(f"{save_loc}/spencerb/hf")
-    copyfile(
-        "/juice/scr/spencerb/editable_nlp/data.zip", 
-        f"{local_dir}/data.zip"
-        )
-    with zipfile.ZipFile(f"{local_dir}/data.zip") as zf:
-        zf.extractall(f"{local_dir}")
-
     
     return local_dir

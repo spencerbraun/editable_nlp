@@ -15,7 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 import sys
 sys.path.append("/juice/scr/spencerb/editable_nlp/src")
 import utils
-from utils import loadOTSModel, retrieveDataloader
+from utils import loadOTSModel, retrieveEditDataloader
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -438,13 +438,13 @@ if __name__ == "__main__":
     loc = utils.sailPreprocess()
     
     model, tokenizer = loadOTSModel(cache_dir=loc)
-    dataloader = retrieveDataloader(
+    dataloader = retrieveEditDataloader(
         tokenizer, 
         bs=1, 
         data_loc=loc,
         dataset='train'
     )
-    validation_set = retrieveDataloader(
+    validation_set = retrieveEditDataloader(
         tokenizer, 
         bs=15, 
         data_loc=loc,

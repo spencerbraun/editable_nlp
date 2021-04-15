@@ -124,7 +124,7 @@ class BaseTrainer:
 class EditTrainer(BaseTrainer):
     def __init__(self, config, dataloader, model_path=None):
         super().__init__(config, dataloader, model_path=None) 
-        self.validation_set = utils.retrieveDataloader(
+        self.validation_set = utils.retrieveEditDataloader(
             self.tokenizer, 
             bs=15, 
             data_loc=self.config.write_loc,
@@ -305,12 +305,14 @@ class SelfSampleTrainer(EditTrainer):
         self.finetuned.eval()
         self.finetuned.to(self.device)
         
-    def genModelText(self, lm_tokens, edit_locs):
+    def genModelText(self, lm_tokens):
         
-        input_ids = lm_tokens[:, :edit_locs.min()]
+        lm_tokens = lm_tokens[lm_tokens != self.tokenizer.pad_token_id]
+        len_lm = lm_tokens.shape[1]
+        edit_loc = max(random.randint(len_lm*0.6, len_lm*0.8), 20)
+        input_ids = lm_tokens[:, :edit_loc]
         input_size = input_ids.size()[-1]
         
-        self.finetuned.eval()
         print("generating")
         output_sequence = self.finetuned.generate(
             input_ids=input_ids,
@@ -357,25 +359,13 @@ class SelfSampleTrainer(EditTrainer):
         for epoch in range(self.config.epochs):
             self.epoch = epoch
             
-            for train_step, (lm_data, _, _, old_ent) in enumerate(self.data):
+            for train_step, lm_data in enumerate(self.data):
                 lm_tokens, lm_mask = lm_data
-                orig_ent_tokens = old_ent[0].flatten()
-                orig_ent_tokens = orig_ent_tokens[orig_ent_tokens != 50256]
-
-                edit_locs = utils.locateSubset(lm_tokens, orig_ent_tokens)
-                
                 lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
                 lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
                 
-                if train_step % 50 == 0:
-                    print(f"SKIPCOUNT: {skip_count}")
-                
-                if edit_locs.nelement() == 0 or (edit_locs.min() < 10):
-                    skip_count += 1
-                    continue
-                
-                edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens, edit_locs)
-                
+                edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens)
+
                 param_groups = [
                     {'params': p, 'lr': None} 
                     for p in self.model.transformer.h[-3:].parameters()
@@ -459,12 +449,10 @@ class SelfSampleTrainer(EditTrainer):
                 self.tensorBoard(global_iter, **loss_dict)
                 self.saveState(self.model, global_iter, name="self_sample")
                 if self.config.learnable_lr:
-                    self.saveState(lr_opt, global_iter, name='lr_opt')
                     self.saveState(lrs, global_iter, name='lr')
         
         self.saveState(self.model, global_iter, final=True, name="self_sample")
         if self.config.learnable_lr:
-                self.saveState(lr_opt, global_iter, final=True, name='lr_opt')
                 self.saveState(lrs, global_iter, final=True, name='lr')
         self.writer.flush()
 
@@ -473,33 +461,46 @@ if __name__ == "__main__":
     parser.add_argument('--editable', action='store_true')
     parser.add_argument('--finetune', action='store_true')
     parser.add_argument('--self_sample', action='store_true')
+    parser.add_argument('--bs', default=1, type=int)
     args = parser.parse_args()
     
     loc = utils.sailPreprocess()
-
     tokenizer = utils.loadTokenizer(cache_dir=loc)
-    tokenizer.pad_token = tokenizer.eos_token
 
-    dataloader = utils.retrieveDataloader(
-        tokenizer, 
-        data_loc=loc,
-        bs=1, 
-        dataset='train'
-    )
+    if args.self_sample:
+        dataloader = wikiDataloader(
+            tokenizer, 
+            bs=args.bs, 
+            data_loc=loc,
+            dataset='train'
+            shuffle=False,
+            max_length=200,
+            min_length=20
+            )
+    else:
+        dataloader = utils.retrieveEditDataloader(
+            tokenizer, 
+            data_loc=loc,
+            bs=args.bs, 
+            dataset='train'
+        )
 
     if args.editable:
         config = EditConfig()
         config.write_loc = loc
+        config.bs = args.bs
         trainer = EditTrainer(config, dataloader)
     
     elif args.finetune:
         config = TrainConfig()
         config.write_loc = loc
+        config.bs = args.bs
         trainer = BaseTrainer(config, dataloader)
     
     elif args.self_sample:
         config = SelfSampleConfig()
         config.write_loc = loc
+        config.bs = args.bs
         trainer = SelfSampleTrainer(config, dataloader, tokenizer)
     
     else:
