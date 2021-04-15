@@ -13,6 +13,7 @@ import torch.nn.functional as F
 
 import spacy
 from datasets import load_dataset, list_metrics, load_metric
+from tqdm import tqdm
 
 import utils
 
@@ -113,12 +114,12 @@ class DataProcessor:
     
     def processEnts(self):
                 
-        for output in self.runNER(self.text):
+        for output in tqdm(self.runNER(self.text)):
             self.ner_texts.append(output)
         
         
     def runNER(self, texts):
-        for doc in self.model.pipe(texts):
+        for doc in tqdm(self.model.pipe(texts)):
             processed = []
             for sent in doc.sents:
                 if any([e.label_ in self.keep_ents for e in sent.ents]):

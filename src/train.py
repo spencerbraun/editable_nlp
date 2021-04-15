@@ -171,7 +171,7 @@ class EditTrainer(BaseTrainer):
             torch.nn.Parameter(torch.tensor(self.config.inner_lr)) 
             for p in self.model.transformer.h[-3:].parameters()
             ]
-        lr_opt = torch.optim.Adam(lrs, lr=1e-2)
+        lr_opt = torch.optim.Adam(lrs, lr=self.config.lr_lr)
 
         for epoch in range(self.config.epochs):
             self.epoch = epoch
@@ -352,7 +352,7 @@ class SelfSampleTrainer(EditTrainer):
             torch.nn.Parameter(torch.tensor(self.config.inner_lr)) 
             for p in self.model.transformer.h[-3:].parameters()
             ]
-        lr_opt = torch.optim.Adam(lrs, lr=1e-2)
+        lr_opt = torch.optim.Adam(lrs, lr=self.config.lr_lr)
 
         skip_count = 0
 
