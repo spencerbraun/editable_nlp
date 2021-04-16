@@ -9,6 +9,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 import higher
 import wandb
 
@@ -47,8 +48,11 @@ class BaseTrainer:
                 project='patchable',
                 entity='patchable-lm',
                 config=self.config,
+                name=f"{self.config.task}_{self.timestamp}",
+                dir=self.config.write_loc,
             )
             wandb.watch(self.model)
+            transformers.logging.set_verbosity_error()
 
         self.epoch = 0
 
