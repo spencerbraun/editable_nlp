@@ -127,18 +127,26 @@ def locateSubset(whole, subset):
 
 
 def sailPreprocess(debug=False):
-    machine_name = platform.node().split(".")[0]
-    scr = max(os.listdir(f"/{machine_name}"))
-    save_loc = f"/{machine_name}/{scr}"
-    local_dir = f"{save_loc}/spencerb"
-    if os.path.exists(local_dir) | debug:
-        return local_dir
-    
-    os.mkdir(f"{save_loc}/spencerb")
-    os.mkdir(f"{save_loc}/spencerb/models")
-    os.mkdir(f"{save_loc}/spencerb/models/finetune")
-    os.mkdir(f"{save_loc}/spencerb/errors")
-    os.mkdir(f"{save_loc}/spencerb/eval")
-    os.mkdir(f"{save_loc}/spencerb/hf")
-    
+    user = os.environ["USER"]
+    if user == "spencerb":
+        machine_name = platform.node().split(".")[0]
+        scr = max(os.listdir(f"/{machine_name}"))
+        save_loc = f"/{machine_name}/{scr}"
+        local_dir = f"{save_loc}/{user}"
+
+        if os.path.exists(local_dir) | debug:
+            return local_dir
+
+        os.mkdir(f"{save_loc}/{user}")
+        os.mkdir(f"{save_loc}/{user}/models")
+        os.mkdir(f"{save_loc}/{user}/models/finetune")
+        os.mkdir(f"{save_loc}/{user}/errors")
+        os.mkdir(f"{save_loc}/{user}/eval")
+        os.mkdir(f"{save_loc}/{user}/hf")
+
+    else:
+        save_loc = "/iris/u"
+        local_dir = f"{save_loc}/{user}/code/editable_nlp"
+
     return local_dir
+
