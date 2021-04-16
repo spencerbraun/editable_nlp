@@ -97,11 +97,12 @@ class BaseTrainer:
         
         global_iter = 0
         print("Starting Fine-tuning")
+        import ipdb; ipdb.set_trace()
 
         for epoch in range(self.config.epochs):
             self.epoch = epoch
             
-            for train_step, (lm_data, _, _, _) in enumerate(self.data):
+            for train_step, lm_data in enumerate(self.data):
                 
                 lm_tokens, lm_mask = lm_data
                 lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
@@ -473,7 +474,7 @@ if __name__ == "__main__":
     loc = utils.sailPreprocess()
     tokenizer = utils.loadTokenizer(cache_dir=loc)
 
-    if args.self_sample:
+    if not args.editable:
         dataloader = utils.wikiDataloader(
             tokenizer,
             bs=args.bs,
