@@ -81,7 +81,7 @@ def wikiDataloader(
 
     ds = WikitextDataset(
         tokenizer, 
-        data_loc=data_loc, 
+        data_loc=f"{data_loc}/hf", 
         dataset=dataset,
         pct=100, 
         max_length=max_length,
