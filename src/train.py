@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import higher
-from torch.utils.tensorboard import SummaryWriter
+import wandb
 
 import utils
 from config import TrainConfig, EditConfig, SelfSampleConfig
@@ -42,10 +42,14 @@ class BaseTrainer:
 
         self.data = dataloader
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.writer = (
-            SummaryWriter(log_dir=f"{self.config.write_loc}/runs/{self.config.task}_{self.timestamp}") 
-            if not self.config.debug else None
+        if not self.config.debug:
+            wandb.init(
+                project='patchable',
+                entity='patchable-lm',
+                config=self.config,
             )
+            wandb.watch(self.model)
+
         self.epoch = 0
 
     def saveState(self, state_obj, train_step, name="finetune", final=False):
@@ -73,6 +77,11 @@ class BaseTrainer:
         if not self.config.debug:
             for key, value in kwargs.items():
                 self.writer.add_scalar(key, value, step)
+    
+    def wandb_log(self, step, row):
+        row['step'] = step
+        if not self.config.debug:
+            wandb.log(row)
 
     def run(self):
 
@@ -112,12 +121,11 @@ class BaseTrainer:
                 
                 global_iter += 1
                 self.echo(train_step, **{"l_base": l_base})
-                self.tensorBoard(global_iter, **{"l_base": l_base})
+                self.wandb_log(global_iter, {"l_base": l_base})
                 self.saveState(self.model, train_step, "gpt2")
 
-        
+
         self.saveState(self.model, train_step)
-        self.writer.flush()
 
 
 
@@ -279,7 +287,7 @@ class EditTrainer(BaseTrainer):
                     "l_loc": l_loc, "total": total_loss
                     }
                 self.echo(train_step, **loss_dict)
-                self.tensorBoard(global_iter, **loss_dict)
+                self.wandb_log(global_iter, loss_dict)
                 self.saveState(self.model, global_iter, name='editable')
                 if self.config.learnable_lr:
                     self.saveState(lr_opt, global_iter, name='lr')
@@ -290,7 +298,6 @@ class EditTrainer(BaseTrainer):
         self.saveState(self.model, global_iter, final=True, name='editable')
         if self.config.learnable_lr:
             self.saveState(lr_opt, global_iter, final=True, name='lr')
-        self.writer.flush()
 
 
 class SelfSampleTrainer(EditTrainer):
@@ -445,8 +452,8 @@ class SelfSampleTrainer(EditTrainer):
                     "l_loc": l_loc, "total": total_loss
                     }
                 self.echo(train_step, **loss_dict)
-                loss_dict.update({f"lr{i}":lr.data.item() for i, lr in enumerate(lrs)})
-                self.tensorBoard(global_iter, **loss_dict)
+                loss_dict.update({f"lr/lr{i}":lr.data.item() for i, lr in enumerate(lrs)})
+                self.wandb_log(global_iter, loss_dict)
                 self.saveState(self.model, global_iter, name="self_sample")
                 if self.config.learnable_lr:
                     self.saveState(lrs, global_iter, name='lr')
@@ -454,7 +461,6 @@ class SelfSampleTrainer(EditTrainer):
         self.saveState(self.model, global_iter, final=True, name="self_sample")
         if self.config.learnable_lr:
                 self.saveState(lrs, global_iter, final=True, name='lr')
-        self.writer.flush()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -469,19 +475,19 @@ if __name__ == "__main__":
 
     if args.self_sample:
         dataloader = utils.wikiDataloader(
-            tokenizer, 
-            bs=args.bs, 
+            tokenizer,
+            bs=args.bs,
             data_loc=loc,
             dataset='train',
             shuffle=False,
             max_length=200,
             min_length=20
-            )
+        )
     else:
         dataloader = utils.retrieveEditDataloader(
-            tokenizer, 
+            tokenizer,
             data_loc=loc,
-            bs=args.bs, 
+            bs=args.bs,
             dataset='train'
         )
 
