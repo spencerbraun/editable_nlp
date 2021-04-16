@@ -97,7 +97,6 @@ class BaseTrainer:
         
         global_iter = 0
         print("Starting Fine-tuning")
-        import ipdb; ipdb.set_trace()
 
         for epoch in range(self.config.epochs):
             self.epoch = epoch

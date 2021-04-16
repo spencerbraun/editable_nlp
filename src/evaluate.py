@@ -88,7 +88,7 @@ def performOneEdit(
     model.train()
     model_ = copy.deepcopy(model)
     param_groups = [
-        {'params': p, 'lr': None} 
+        {'params': p, 'lr': 1e-3} 
         for p in model.transformer.h[-3:].parameters()
     ]
     inner_opt = (torch.optim.SGD(param_groups))
@@ -97,7 +97,7 @@ def performOneEdit(
     with higher.innerloop_ctx(
         model, 
         inner_opt, 
-        override={'lr': lrs},
+        override={'lr': lrs} if lrs else None,
         copy_initial_weights=False, 
         track_higher_grads=True
         ) as (fmodel, diffopt):
@@ -167,7 +167,10 @@ def evalEditable(
     n_edits = 0
     saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}" 
     
-    lrs = loadLr(model_name)
+    try:
+        lrs = loadLr(model_name)
+    except AttributeError:
+        lrs = []
 
     with open(saveloc, "w") as f:
         f.write((
@@ -267,8 +270,10 @@ def evalSelfSample(
     model.to(DEVICE)
     n_edits = 0
     saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}" 
-    
-    lrs = loadLr(model_name)
+    try: 
+        lrs = loadLr(model_name)
+    except AttributeError:
+        lrs = []
 
     with open(saveloc, "w") as f:
         f.write((
