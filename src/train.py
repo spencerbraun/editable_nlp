@@ -120,8 +120,8 @@ class BaseTrainer:
                     opt.zero_grad()
                 
                 global_iter += 1
-                self.echo(train_step, **{"l_base": l_base})
-                self.wandb_log(global_iter, {"l_base": l_base})
+                self.echo(train_step, **{"loss/base": l_base})
+                self.wandb_log(global_iter, {"loss/base": l_base})
                 self.saveState(self.model, train_step, "gpt2")
 
 
@@ -283,8 +283,8 @@ class EditTrainer(BaseTrainer):
                 global_iter += 1
                 
                 loss_dict = {
-                    "l_base": l_base, "l_edit": l_edit, 
-                    "l_loc": l_loc, "total": total_loss
+                    "loss/base": l_base, "loss/edit": l_edit, 
+                    "loss/loc": l_loc, "loss/total": total_loss
                     }
                 self.echo(train_step, **loss_dict)
                 self.wandb_log(global_iter, loss_dict)
@@ -448,8 +448,8 @@ class SelfSampleTrainer(EditTrainer):
                 global_iter += 1
                 
                 loss_dict = {
-                    "l_base": l_base, "l_edit": l_edit, 
-                    "l_loc": l_loc, "total": total_loss
+                    "loss/base": l_base, "loss/edit": l_edit, 
+                    "loss/loc": l_loc, "loss/total": total_loss
                     }
                 self.echo(train_step, **loss_dict)
                 loss_dict.update({f"lr/lr{i}":lr.data.item() for i, lr in enumerate(lrs)})
