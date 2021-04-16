@@ -27,7 +27,7 @@ def perplexity(model, dataloader):
     model.to(DEVICE)
     model.eval()
     with torch.no_grad():
-        for batch_idx, (lm_data, _, _, _) in enumerate(dataloader):
+        for batch_idx, lm_data in enumerate(dataloader):
             lm_tokens, lm_mask = lm_data
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
@@ -119,7 +119,7 @@ def performOneEdit(
     
     return model_
 
-def genModelText(finetuned, lm_tokens, edit_locs):
+def genModelText(finetuned, lm_tokens):
         
         lm_tokens = lm_tokens[lm_tokens != 50256]
         len_lm = lm_tokens.shape[-1]
@@ -128,7 +128,7 @@ def genModelText(finetuned, lm_tokens, edit_locs):
         input_size = input_ids.size()[-1]
         
         finetuned.eval()
-        print("generating")
+        print(f"generating, {DEVICE}")
         output_sequence = finetuned.generate(
             input_ids=input_ids.unsqueeze(0),
             max_length=input_size + 5,
@@ -146,8 +146,9 @@ def genModelText(finetuned, lm_tokens, edit_locs):
 
         edit_labels = edit_labels.to(DEVICE)
         edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
+        edit_locs = torch.tensor([edit_loc + i for i in range(5)])
 
-        return edit_tokens, edit_mask, edit_labels, gold_tokens
+        return edit_tokens, edit_mask, edit_labels, gold_tokens, edit_locs
 
 def evalEditable(
     model, 
@@ -281,8 +282,8 @@ def evalSelfSample(
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
 
-            edit_tokens, edit_mask, edit_labels, gold_tokens = genModelText(
-                finetuned, lm_tokens, edit_locs
+            edit_tokens, edit_mask, edit_labels, gold_tokens, edit_locs = genModelText(
+                finetuned, lm_tokens
                 )
                 
             gold_tokens = gold_tokens.cpu()
@@ -471,16 +472,27 @@ if __name__ == "__main__":
     if args.model_path: 
         model, tokenizer = utils.loadTrainedModel(args.model_path, cache_dir=loc)
 
-    ds = 'test' if args.test_set else 'valid'
-    dataloader = utils.retrieveEditDataloader(tokenizer, bs=1, data_loc=loc, dataset=ds)
+    ds = 'test' if args.test_set else 'validation'
+    if args.self_sample:
+        dataloader = utils.wikiDataloader(tokenizer, bs=1, data_loc=loc, dataset=ds)
+    else:
+        dataloader = utils.retrieveEditDataloader(tokenizer, bs=1, data_loc=loc, dataset=ds)
 
-    if args.model_path:
-        evalSequentialEdits(
+    if args.self_sample:
+        evalSelfSample(
             model, 
             dataloader,
             args.model_path, 
             int(args.edit_steps),
             loc=loc,
-            self_sample=args.self_sample,
+            testset=args.test_set
+            )
+    else:
+         evalEditable(
+            model,
+            dataloader,
+            args.model_path,
+            int(args.edit_steps),
+            loc=loc,
             testset=args.test_set
             )
