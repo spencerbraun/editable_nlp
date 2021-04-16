@@ -85,25 +85,32 @@ def locateSubset(whole, subset):
 
 
 def sailPreprocess(debug=False):
-    machine_name = platform.node().split(".")[0]
-    scr = max(os.listdir(f"/{machine_name}"))
-    save_loc = f"/{machine_name}/{scr}"
-    local_dir = f"{save_loc}/spencerb"
-    if os.path.exists(local_dir) | debug:
-        return local_dir
-    
-    os.mkdir(f"{save_loc}/spencerb")
-    os.mkdir(f"{save_loc}/spencerb/models")
-    os.mkdir(f"{save_loc}/spencerb/models/finetune")
-    os.mkdir(f"{save_loc}/spencerb/errors")
-    os.mkdir(f"{save_loc}/spencerb/eval")
-    os.mkdir(f"{save_loc}/spencerb/hf")
-    copyfile(
-        "/juice/scr/spencerb/editable_nlp/data.zip", 
-        f"{local_dir}/data.zip"
-        )
-    with zipfile.ZipFile(f"{local_dir}/data.zip") as zf:
-        zf.extractall(f"{local_dir}")
+    user = os.environ["USER"]
+    if user == "spencerb":
+        machine_name = platform.node().split(".")[0]
+        scr = max(os.listdir(f"/{machine_name}"))
+        save_loc = f"/{machine_name}/{scr}"
+        local_dir = f"{save_loc}/{user}"
 
-    
+        if os.path.exists(local_dir) | debug:
+            return local_dir
+
+        os.mkdir(f"{save_loc}/{user}")
+        os.mkdir(f"{save_loc}/{user}/models")
+        os.mkdir(f"{save_loc}/{user}/models/finetune")
+        os.mkdir(f"{save_loc}/{user}/errors")
+        os.mkdir(f"{save_loc}/{user}/eval")
+        os.mkdir(f"{save_loc}/{user}/hf")
+        copyfile(
+            f"/juice/scr/{user}/editable_nlp/data.zip", 
+            f"{local_dir}/data.zip"
+            )
+        with zipfile.ZipFile(f"{local_dir}/data.zip") as zf:
+            zf.extractall(f"{local_dir}")
+
+    else:
+        save_loc = "/iris/u"
+        local_dir = f"{save_loc}/{user}/code/editable_nlp"
+
     return local_dir
+
