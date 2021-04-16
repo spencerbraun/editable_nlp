@@ -121,17 +121,20 @@ def performOneEdit(
 
 def genModelText(finetuned, lm_tokens, edit_locs):
         
-        input_ids = lm_tokens[:, :edit_locs.min()]
+        lm_tokens = lm_tokens[lm_tokens != 50256]
+        len_lm = lm_tokens.shape[-1]
+        edit_loc = max(random.randint(int(len_lm*0.6), int(len_lm*0.9)), 15)
+        input_ids = lm_tokens[:edit_loc]
         input_size = input_ids.size()[-1]
         
         finetuned.eval()
         print("generating")
         output_sequence = finetuned.generate(
-            input_ids=input_ids,
+            input_ids=input_ids.unsqueeze(0),
             max_length=input_size + 5,
             temperature=1.2,
-            repetition_penalty=5.0,
             do_sample=True,
+            repetition_penalty=5.0,
             num_return_sequences=10,
         )
 
@@ -146,23 +149,14 @@ def genModelText(finetuned, lm_tokens, edit_locs):
 
         return edit_tokens, edit_mask, edit_labels, gold_tokens
 
-def evalSequentialEdits(
+def evalEditable(
     model, 
     dataloader, 
     model_name, 
     n_edit_steps,
     loc="..",
-    self_sample=False, 
     testset=False
     ):
-
-    if self_sample:
-        finetuned = utils.loadTrainedModel(
-            f"{loc}/models/finetune/gpt2_epoch0_ts10000.20210408.09.04.1617899457", 
-            cache_dir=loc,
-            tokenizer=False
-        )
-        finetuned.to(DEVICE)
     
     
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
@@ -190,30 +184,17 @@ def evalSequentialEdits(
             ent_tokens = new_ent[0].flatten() #1d array of vocab indexes
             ent_tokens = ent_tokens[ent_tokens != 50256]
 
-            if self_sample:
-                edit_locs = utils.locateSubset(lm_tokens, orig_ent_tokens)
-            else:
-                edit_locs = utils.locateSubset(edit_tokens, ent_tokens)
+            edit_locs = utils.locateSubset(edit_tokens, ent_tokens)
             
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
-
-            if self_sample:
-                if edit_locs.nelement() == 0 or (edit_locs.min() < 10):
-                    print(f"Skipping {train_step}")
-                    continue
-                edit_tokens, edit_mask, edit_labels, gold_tokens = genModelText(
-                    finetuned, lm_tokens, edit_locs
-                    )
-                
-                gold_tokens = gold_tokens.cpu()
-            else:
-                edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
-                edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
-                edit_labels = edit_labels.to(DEVICE)
-                edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
-                
-                gold_tokens = ent_tokens.cpu()
+            
+            edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
+            edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
+            edit_labels = edit_labels.to(DEVICE)
+            edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
+            
+            gold_tokens = ent_tokens.cpu()
 
             orig_logits, orig_prob = getIndexedProbs(
                 model, 
@@ -260,6 +241,98 @@ def evalSequentialEdits(
             n_edits +=1 
             if n_edits >= 100:
                 break
+
+
+
+def evalSelfSample(
+    model, 
+    dataloader, 
+    model_name, 
+    n_edit_steps,
+    loc="..",
+    testset=False
+    ):
+
+    finetuned = utils.loadTrainedModel(
+        f"{loc}/models/finetune/gpt2_epoch0_ts10000.20210408.09.04.1617899457", 
+        cache_dir=loc,
+        tokenizer=False
+    )
+    finetuned.to(DEVICE)
+    
+    timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
+    filename = f"edit_success_{timestamp}_{os.path.basename(model_name)}"
+    
+    model.to(DEVICE)
+    n_edits = 0
+    saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}" 
+    
+    lrs = loadLr(model_name)
+
+    with open(saveloc, "w") as f:
+        f.write((
+            "train_step,n_edit_steps,success,success_diff,"
+            "new_logits,orig_logits,new_ppl,orig_ppl,new_prob,old_prob\n"
+            ))
+        for train_step, lm_data in enumerate(dataloader):
+            print(f"TS {train_step}")
+            
+            lm_tokens, lm_mask = lm_data
+            lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
+            lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
+
+            edit_tokens, edit_mask, edit_labels, gold_tokens = genModelText(
+                finetuned, lm_tokens, edit_locs
+                )
+                
+            gold_tokens = gold_tokens.cpu()
+
+            orig_logits, orig_prob = getIndexedProbs(
+                model, 
+                edit_locs, 
+                gold_tokens, 
+                edit_tokens, 
+                edit_mask, 
+                edit_labels
+                )
+            orig_ppl = perplexity(model, dataloader)
+
+            model_out = performOneEdit(
+                model,
+                lrs,
+                edit_tokens, 
+                edit_mask, 
+                edit_labels,
+                n_edit_steps=n_edit_steps, 
+                lr=1e-3
+                )
+                    
+            new_logits, new_prob = getIndexedProbs(
+                model_out, 
+                edit_locs, 
+                gold_tokens, 
+                edit_tokens, 
+                edit_mask, 
+                edit_labels
+                )
+            new_ppl = perplexity(model_out, dataloader)
+
+            success = new_logits > orig_logits
+            success_diff = orig_logits - new_logits
+
+            run = (
+                train_step, n_edit_steps, success, success_diff, 
+                new_logits, orig_logits, new_ppl, orig_ppl, new_prob, orig_prob
+                )
+
+            form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
+            writeStr = ",".join([form(x) for x in run])
+            f.write(f"{writeStr}\n")
+
+            n_edits +=1 
+            if n_edits >= 100:
+                break
+
 
 class ModelComps:
     def __init__(self, model_name, base_name, loc="..", archive=False, test=False):
