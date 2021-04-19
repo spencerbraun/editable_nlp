@@ -136,7 +136,7 @@ class EditTrainer(BaseTrainer):
             self.tokenizer, 
             bs=15, 
             data_loc=self.config.write_loc,
-            dataset='valid',
+            dataset='validation',
             shuffle=True
         )
         self.val_iter = 0
