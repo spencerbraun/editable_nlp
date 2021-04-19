@@ -65,26 +65,26 @@ def wikiDataloader(
     max_length=200,
     min_length=20
     ):
-
+    
+    tokenizer.padding_side = "left" 
+    tokenizer.pad_token = tokenizer.eos_token
+    
     def pad_collate(batch):
-        tokens = [x[0] for x in batch]
-        mask = [x[1] for x in batch]
-        tok_pad = torch.nn.utils.rnn.pad_sequence(
-            tokens, batch_first=True, 
-            padding_value=tokenizer.pad_token_id
-        )
-        mask_pad = torch.nn.utils.rnn.pad_sequence(
-            mask, batch_first=True, 
-            padding_value=0
-        )
-        return tok_pad, mask_pad
+        toks = tokenizer(
+                batch,
+                truncation=True,
+                max_length=max_length,
+                padding=True
+            )
+        return (
+            torch.tensor(toks['input_ids']), 
+            torch.tensor(toks['attention_mask'])
+            )
 
     ds = WikitextDataset(
-        tokenizer, 
         data_loc=f"{data_loc}/hf", 
         dataset=dataset,
         pct=100, 
-        max_length=max_length,
         min_length=min_length
         )
     dataloader = torch.utils.data.DataLoader(
@@ -93,7 +93,7 @@ def wikiDataloader(
         num_workers=2,
         pin_memory=True,
         shuffle=shuffle,
-        collate_fn=pad_collate if bs > 1 else None
+        collate_fn=pad_collate
     )
 
     return dataloader
