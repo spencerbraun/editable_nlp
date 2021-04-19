@@ -132,31 +132,35 @@ class BaseTrainer:
 class EditTrainer(BaseTrainer):
     def __init__(self, config, dataloader, model_path=None):
         super().__init__(config, dataloader, model_path=None) 
-        self.validation_set = utils.retrieveEditDataloader(
+        self.validation_set = utils.wikiDataloader(
             self.tokenizer, 
             bs=15, 
             data_loc=self.config.write_loc,
             dataset='valid',
-            max_obs=1000,
             shuffle=True
         )
         self.val_iter = 0
 
     def validateEditTraining(self):
         self.model.eval()
-        for train_step, (lm_data, _, _, _) in enumerate(self.validation_set):
+        iters = 0
+        for train_step, lm_data in enumerate(self.validation_set):
                 
-                lm_tokens, lm_mask = lm_data
-                lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
-                lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
-                
-                base_out = self.model(
-                    lm_tokens, 
-                    attention_mask=lm_mask,
-                    labels=lm_labels
-                )
-                self.writer.add_scalar("val_lbase", base_out.loss, self.val_iter)
-                self.val_iter +=1
+            lm_tokens, lm_mask = lm_data
+            lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
+            lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
+            
+            base_out = self.model(
+                lm_tokens, 
+                attention_mask=lm_mask,
+                labels=lm_labels
+            )
+            self.writer.add_scalar("val_lbase", base_out.loss, self.val_iter)
+            self.val_iter +=1
+            iters += 1
+            
+            if iters >= 1000: 
+                break
         
         self.model.train()
     
@@ -291,6 +295,9 @@ class EditTrainer(BaseTrainer):
                 self.saveState(self.model, global_iter, name='editable')
                 if self.config.learnable_lr:
                     self.saveState(lr_opt, global_iter, name='lr')
+                if global_iter >= self.config.max_iter:
+                    print("Reached max iterations")
+                    break
 
             # if (train_step % 1000 == 0) & (not self.config.debug):
             #     self.validateEditTraining()
@@ -314,15 +321,14 @@ class SelfSampleTrainer(EditTrainer):
         
     def genModelText(self, lm_tokens):
         
-        lm_tokens = lm_tokens[lm_tokens != self.tokenizer.pad_token_id]
         len_lm = lm_tokens.shape[-1]
         edit_loc = max(random.randint(int(len_lm*0.6), int(len_lm*0.9)), 15)
-        input_ids = lm_tokens[:edit_loc]
+        input_ids = lm_tokens[:, :edit_loc]
         input_size = input_ids.size()[-1]
         
         print("generating")
         output_sequence = self.finetuned.generate(
-            input_ids=input_ids.unsqueeze(0),
+            input_ids=input_ids,
             max_length=input_size + 5,
             temperature=1.2,
             do_sample=True,
@@ -457,6 +463,9 @@ class SelfSampleTrainer(EditTrainer):
                 self.saveState(self.model, global_iter, name="self_sample")
                 if self.config.learnable_lr:
                     self.saveState(lrs, global_iter, name='lr')
+                if global_iter >= self.config.max_iter:
+                    print("Reached max iterations")
+                    break
         
         self.saveState(self.model, global_iter, final=True, name="self_sample")
         if self.config.learnable_lr:
