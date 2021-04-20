@@ -430,7 +430,7 @@ class ModelComps:
         
         return stats_df
     
-    def summary(self):
+    def summary(self, long=False):
         if not self.stats:
             self.runStats()
         print("Model Parameters:")
@@ -444,8 +444,10 @@ class ModelComps:
             .rename(columns={'index':'model'})
             .sort_values(["model", "edit_steps"], ascending=False)
         )
-        
-        display(stats_df)
+        if long:
+            display(stats_df.melt())
+        else:
+            display(stats_df)
                 
     def plotter(self, xlim=[]):
         print("Plotting Logits")

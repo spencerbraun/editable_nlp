@@ -10,13 +10,14 @@ import evaluate as ev
 from shutil import copyfile
 
 def modelCompare(eval_path, loc):
-    finetune = f'{loc}/models/finetune/gpt2_epoch0_ts10000.20210416.09.04.1618591490'
+    finetune = 'gpt2_epoch0_ts10000.20210416.09.04.1618591490'
 
     mc = ev.ModelComps(
         model_name=eval_path,
-        base_name=finetune
+        base_name=finetune,
+        loc=loc
     )
-    print(mc.summary())
+    print(mc.summary(long=True))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -55,7 +56,7 @@ if __name__ == "__main__":
         config.cloc = args.cloc
         config.lr_lr = args.lr_lr
         config.max_iter = args.max_iter
-        config.silent = True
+        #config.silent = True
         
         trainer = train.SelfSampleTrainer(config, dataloader, tokenizer)
         trainer.run()
