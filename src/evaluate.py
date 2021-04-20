@@ -86,7 +86,6 @@ def performOneEdit(
     ):
     
     model.train()
-    model_ = copy.deepcopy(model)
     param_groups = [
         {'params': p, 'lr': 1e-3} 
         for p in model.transformer.h[-3:].parameters()
@@ -115,9 +114,9 @@ def performOneEdit(
 
             print(f"Edit step {edit_step}; loss {loss} ") 
         
-        model_.load_state_dict(fmodel.state_dict())
+        model.load_state_dict(fmodel.state_dict())
     
-    return model_
+    return model
 
 def genModelText(finetuned, lm_tokens):
         
@@ -253,6 +252,7 @@ def evalSelfSample(
     dataloader, 
     model_name, 
     n_edit_steps,
+    seq_edits=1,
     loc="..",
     testset=False
     ):
@@ -274,10 +274,15 @@ def evalSelfSample(
         lrs = loadLr(model_name)
     except AttributeError:
         lrs = []
+    
+    edit_number = 1
+    sequential = seq_edits > 1
+    if sequential:
+        model_edited = copy.deepcopy(model)
 
     with open(saveloc, "w") as f:
         f.write((
-            "train_step,n_edit_steps,success,success_diff,"
+            "train_step,n_edit_steps,edit_number,success,success_diff,"
             "new_logits,orig_logits,new_ppl,orig_ppl,new_prob,old_prob\n"
             ))
         for train_step, lm_data in enumerate(dataloader):
@@ -304,7 +309,7 @@ def evalSelfSample(
             orig_ppl = perplexity(model, dataloader)
 
             model_out = performOneEdit(
-                model,
+                model if not sequential else model_edited,
                 lrs,
                 edit_tokens, 
                 edit_mask, 
@@ -312,6 +317,14 @@ def evalSelfSample(
                 n_edit_steps=n_edit_steps, 
                 lr=1e-3
                 )
+
+            if (edit_number < n_edits) & sequential:
+                edit_number += 1
+                model_edited.load_state_dict(model_out.state_dict())
+            else:
+                edit_number = 1
+                if sequential:
+                    model_edited.load_state_dict(model.state_dict())
                     
             new_logits, new_prob = getIndexedProbs(
                 model_out, 
@@ -327,7 +340,7 @@ def evalSelfSample(
             success_diff = orig_logits - new_logits
 
             run = (
-                train_step, n_edit_steps, success, success_diff, 
+                train_step, n_edit_steps, edit_number, success, success_diff, 
                 new_logits, orig_logits, new_ppl, orig_ppl, new_prob, orig_prob
                 )
 
@@ -336,7 +349,7 @@ def evalSelfSample(
             f.write(f"{writeStr}\n")
 
             n_edits +=1 
-            if n_edits >= 100:
+            if n_edits >= (100 * seq_edits):
                 break
 
 
@@ -471,7 +484,8 @@ if __name__ == "__main__":
     parser.add_argument('--model_path', help='')
     parser.add_argument('--test_set', action='store_true')
     parser.add_argument('--self_sample', action='store_true')
-    parser.add_argument('--edit_steps', default=1)
+    parser.add_argument('--edit_steps', default=1, type=int)
+    parser.add_argument('--seq_edits', default=1, type=int)
     args = parser.parse_args()
 
     loc = utils.sailPreprocess()
@@ -491,6 +505,7 @@ if __name__ == "__main__":
             dataloader,
             args.model_path, 
             int(args.edit_steps),
+            seq_edits=args.seq_edits,
             loc=loc,
             testset=args.test_set
             )
