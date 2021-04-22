@@ -38,26 +38,17 @@ def perplexity(model, dataloader):
 
     return torch.exp(torch.mean(torch.stack(total_loss)))
 
-def getIndexedProbs(model, index, gold_tokens, sent_tokens, mask, labels):
+def getIndexedProbs(model, index, gold_tokens, sent_tokens):
        
     model.eval()
     with torch.no_grad():
-        output = model(
-            sent_tokens, 
-            attention_mask=mask,
-            labels=labels
-        )
+        output = model(sent_tokens)
         logits = output.logits[:,index,:].detach().cpu().squeeze(0) #squeeze batch size
-        probs = (
-            output.logits[:,index,:]
-            .softmax(dim=-1).detach().cpu().squeeze(0)
-            )
-               
         if len(list(gold_tokens.shape)) == 1:
             gold_tokens.unsqueeze_(1)
         logit_sum = torch.sum(logits.gather(1, gold_tokens))
-        probs_avg = torch.mean(probs.gather(1, gold_tokens))
-    return logit_sum, probs_avg
+
+    return logit_sum
 
 def loadLr(model_path):
     model_name = os.path.basename(model_path)
@@ -81,8 +72,9 @@ def performOneEdit(
     edit_tokens,
     edit_mask,
     edit_labels,
-    n_edit_steps=5,
-    lr=1e-3
+    edit_locs, 
+    gold_tokens,
+    n_edit_steps=10
     ):
     
     model.train()
@@ -92,7 +84,11 @@ def performOneEdit(
     ]
     inner_opt = (torch.optim.SGD(param_groups))
     
-    print("starting edit")
+    logit_hist = []
+    logit_hist.append(
+        getIndexedProbs(model, edit_locs, gold_tokens, edit_tokens)
+    )
+
     with higher.innerloop_ctx(
         model, 
         inner_opt, 
@@ -108,28 +104,34 @@ def performOneEdit(
                 attention_mask=edit_mask,
                 labels=edit_labels
             ).loss
-            if loss == 0 and edit_step > 0:
-                break
             diffopt.step(loss)
+            
+            logit_hist.append(
+                getIndexedProbs(fmodel, edit_locs, gold_tokens, edit_tokens)
+            )
 
-            print(f"Edit step {edit_step}; loss {loss} ") 
+            ll_change = (abs(logit_hist[-2]) - abs(logit_hist[-1]))/abs(logit_hist[-2])
+            if ll_change >= 0.1:
+                break
+            
+
+            print(f"Edit step {edit_step}; ll change {ll_change} ") 
         
         model.load_state_dict(fmodel.state_dict())
     
-    return model
+    return model_, logit_hist
 
 def genModelText(finetuned, lm_tokens):
         
-        lm_tokens = lm_tokens[lm_tokens != 50256]
         len_lm = lm_tokens.shape[-1]
         edit_loc = max(random.randint(int(len_lm*0.6), int(len_lm*0.9)), 15)
-        input_ids = lm_tokens[:edit_loc]
+        input_ids = lm_tokens[:, :edit_loc]
         input_size = input_ids.size()[-1]
         
         finetuned.eval()
         print(f"generating, {DEVICE}")
         output_sequence = finetuned.generate(
-            input_ids=input_ids.unsqueeze(0),
+            input_ids=input_ids,
             max_length=input_size + 5,
             temperature=1.2,
             do_sample=True,
@@ -172,10 +174,7 @@ def evalEditable(
         lrs = []
 
     with open(saveloc, "w") as f:
-        f.write((
-            "train_step,n_edit_steps,success,success_diff,"
-            "new_logits,orig_logits,new_ppl,orig_ppl,new_prob,old_prob\n"
-            ))
+        f.write("train_step,n_edit_steps,logits,orig_ppl,new_ppl\n")
         for train_step, (lm_data, edit_example, new_ent, old_ent) in enumerate(dataloader):
             print(f"TS {train_step}")
             
@@ -199,47 +198,27 @@ def evalEditable(
             
             gold_tokens = ent_tokens.cpu()
 
-            orig_logits, orig_prob = getIndexedProbs(
-                model, 
-                edit_locs, 
-                gold_tokens, 
-                edit_tokens, 
-                edit_mask, 
-                edit_labels
-                )
             orig_ppl = perplexity(model, dataloader)
 
-            model_out = performOneEdit(
+            model_out, logit_hist = performOneEdit(
                 model,
                 lrs,
                 edit_tokens, 
                 edit_mask, 
                 edit_labels,
+                edit_locs, 
+                gold_tokens,
                 n_edit_steps=n_edit_steps, 
                 lr=1e-3
                 )
                     
-            new_logits, new_prob = getIndexedProbs(
-                model_out, 
-                edit_locs, 
-                gold_tokens, 
-                edit_tokens, 
-                edit_mask, 
-                edit_labels
-                )
             new_ppl = perplexity(model_out, dataloader)
 
-            success = new_logits > orig_logits
-            success_diff = orig_logits - new_logits
-
-            run = (
-                train_step, n_edit_steps, success, success_diff, 
-                new_logits, orig_logits, new_ppl, orig_ppl, new_prob, orig_prob
-                )
-
-            form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
-            writeStr = ",".join([form(x) for x in run])
-            f.write(f"{writeStr}\n")
+            for val in logit_hist:
+                run = (train_step, n_edit_steps, val, orig_ppl, new_ppl)
+                form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
+                writeStr = ",".join([form(x) for x in run])
+                f.write(f"{writeStr}\n")
 
             n_edits +=1 
             if n_edits >= 100:
@@ -270,9 +249,11 @@ def evalSelfSample(
     model.to(DEVICE)
     n_edits = 0
     saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}" 
+
     try: 
         lrs = loadLr(model_name)
     except AttributeError:
+        print("!!!!!!!!!No learning rates found!!!!!!!!!")
         lrs = []
     
     edit_number = 1
@@ -281,12 +262,9 @@ def evalSelfSample(
         model_edited = copy.deepcopy(model)
 
     with open(saveloc, "w") as f:
-        f.write((
-            "train_step,n_edit_steps,edit_number,success,success_diff,"
-            "new_logits,orig_logits,new_ppl,orig_ppl,new_prob,old_prob\n"
-            ))
+        f.write("train_step,n_edit_steps,logits,orig_ppl,new_ppl\n")
         for train_step, lm_data in enumerate(dataloader):
-            print(f"TS {train_step}")
+            print(f"Val Step {train_step}")
             
             lm_tokens, lm_mask = lm_data
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
@@ -297,56 +275,24 @@ def evalSelfSample(
                 )
                 
             gold_tokens = gold_tokens.cpu()
-
-            orig_logits, orig_prob = getIndexedProbs(
-                model, 
-                edit_locs, 
-                gold_tokens, 
-                edit_tokens, 
-                edit_mask, 
-                edit_labels
-                )
             orig_ppl = perplexity(model, dataloader)
 
-            model_out = performOneEdit(
-                model if not sequential else model_edited,
+            model_out, logit_hist = performOneEdit(
+                model,
                 lrs,
                 edit_tokens, 
                 edit_mask, 
                 edit_labels,
-                n_edit_steps=n_edit_steps, 
-                lr=1e-3
+                n_edit_steps=n_edit_steps
                 )
 
-            if (edit_number < n_edits) & sequential:
-                edit_number += 1
-                model_edited.load_state_dict(model_out.state_dict())
-            else:
-                edit_number = 1
-                if sequential:
-                    model_edited.load_state_dict(model.state_dict())
-                    
-            new_logits, new_prob = getIndexedProbs(
-                model_out, 
-                edit_locs, 
-                gold_tokens, 
-                edit_tokens, 
-                edit_mask, 
-                edit_labels
-                )
             new_ppl = perplexity(model_out, dataloader)
 
-            success = new_logits > orig_logits
-            success_diff = orig_logits - new_logits
-
-            run = (
-                train_step, n_edit_steps, edit_number, success, success_diff, 
-                new_logits, orig_logits, new_ppl, orig_ppl, new_prob, orig_prob
-                )
-
-            form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
-            writeStr = ",".join([form(x) for x in run])
-            f.write(f"{writeStr}\n")
+            for val in logit_hist:
+                run = (train_step, n_edit_steps, val, orig_ppl, new_ppl)
+                form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
+                writeStr = ",".join([form(x) for x in run])
+                f.write(f"{writeStr}\n")
 
             n_edits +=1 
             if n_edits >= (100 * seq_edits):
@@ -484,7 +430,7 @@ if __name__ == "__main__":
     parser.add_argument('--model_path', help='')
     parser.add_argument('--test_set', action='store_true')
     parser.add_argument('--self_sample', action='store_true')
-    parser.add_argument('--edit_steps', default=1, type=int)
+    parser.add_argument('--edit_steps', default=10, type=int)
     parser.add_argument('--seq_edits', default=1, type=int)
     args = parser.parse_args()
 
