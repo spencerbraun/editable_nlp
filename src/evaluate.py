@@ -62,6 +62,7 @@ def loadLr(model_path):
     elif len(lr_glob) == 0:
         raise AttributeError("No lr specifications found")
     else:
+        print(f"Loading lrs {lr_glob[0]}")
         lrs = torch.load(lr_glob[0])
 
     return lrs
@@ -88,7 +89,6 @@ def performOneEdit(
     logit_hist.append(
         getIndexedProbs(model, edit_locs, gold_tokens, edit_tokens)
     )
-
     with higher.innerloop_ctx(
         model, 
         inner_opt, 
@@ -110,12 +110,12 @@ def performOneEdit(
                 getIndexedProbs(fmodel, edit_locs, gold_tokens, edit_tokens)
             )
 
-            ll_change = (abs(logit_hist[-2]) - abs(logit_hist[-1]))/abs(logit_hist[-2])
+            ll_change = (abs(logit_hist[0]) - abs(logit_hist[-1]))/abs(logit_hist[0])
+            print(f"Edit step {edit_step}; ll change {ll_change} , logit {logit_hist[-1]}")
             if ll_change >= 0.1:
                 break
             
 
-            print(f"Edit step {edit_step}; ll change {ll_change} ") 
         
         model.load_state_dict(fmodel.state_dict())
     
@@ -261,8 +261,10 @@ def evalSelfSample(
     if sequential:
         model_edited = copy.deepcopy(model)
 
+    orig_ppl = perplexity(model, dataloader)
+
     with open(saveloc, "w") as f:
-        f.write("train_step,n_edit_steps,logits,orig_ppl,new_ppl\n")
+        f.write("train_step,n_edit_steps,edit_step,logits,orig_ppl,new_ppl\n")
         for train_step, lm_data in enumerate(dataloader):
             print(f"Val Step {train_step}")
             
@@ -275,7 +277,6 @@ def evalSelfSample(
                 )
                 
             gold_tokens = gold_tokens.cpu()
-            orig_ppl = perplexity(model, dataloader)
 
             model_out, logit_hist = performOneEdit(
                 model,
@@ -283,13 +284,15 @@ def evalSelfSample(
                 edit_tokens, 
                 edit_mask, 
                 edit_labels,
+                edit_locs, 
+                gold_tokens,
                 n_edit_steps=n_edit_steps
                 )
 
             new_ppl = perplexity(model_out, dataloader)
 
-            for val in logit_hist:
-                run = (train_step, n_edit_steps, val, orig_ppl, new_ppl)
+            for idx, val in enumerate(logit_hist):
+                run = (train_step, n_edit_steps, idx, val, orig_ppl, new_ppl)
                 form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
                 writeStr = ",".join([form(x) for x in run])
                 f.write(f"{writeStr}\n")
