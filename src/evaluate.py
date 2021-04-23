@@ -113,7 +113,7 @@ def performOneEdit(
             )
 
             ll_change = (abs(logit_hist[0]) - abs(logit_hist[-1]))/abs(logit_hist[0])
-            
+            print(f"logit history: {logit_hist}")
             print(f"Edit step {edit_step}; ll change {ll_change} , logit {logit_hist[-1]}, loss {output.loss}")
             if ll_change >= 0.1:
                 break
@@ -149,7 +149,7 @@ def genModelText(finetuned, lm_tokens):
 
         edit_labels = edit_labels.to(DEVICE)
         edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
-        edit_locs = torch.tensor([edit_loc + i for i in range(5)])
+        edit_locs = torch.tensor([edit_loc + i - 1 for i in range(5)])
 
         return edit_tokens, edit_mask, edit_labels, gold_tokens, edit_locs
 
