@@ -43,7 +43,8 @@ def getIndexedProbs(model, index, gold_tokens, sent_tokens):
     model.eval()
     with torch.no_grad():
         output = model(sent_tokens)
-        logits = output.logits[:,index,:].detach().cpu().squeeze(0) #squeeze batch size
+        output_lps = F.log_softmax(output.logits, dim=-1)
+        logits = output_lps[:,index,:].detach().cpu().squeeze(0) #squeeze batch size
         
         gold_tokens = gold_tokens.flatten().unsqueeze_(1)
         logit_sum = torch.sum(logits.gather(1, gold_tokens))
