@@ -36,18 +36,33 @@ def retrieveEditDataloader(
     data_loc='..',
     dataset='train', 
     max_obs=float('inf'),
-    shuffle=False
-    ):
+    shuffle=False,
+    self_sample=False,
+):
 
-    writtenFiles = (
-        glob.glob(f"{data_loc}/data/permuted*") if dataset == 'train' 
-        else glob.glob(f"{data_loc}/data/valid/original*") if dataset == 'valid' 
-        else glob.glob(f"{data_loc}/data/test/original*")
+    data_path = f"{data_loc}/data/self_sample" if self_sample else f"{data_loc}/data"
+    if self_sample:
+        writtenFiles = (
+            glob.glob(f"{data_path}/*") if dataset == 'train'
+            else glob.glob(f"{data_path}/valid/*") if dataset == 'validation'
+            else glob.glob(f"{data_path}/test/*")
+        )
+    else:
+        writtenFiles = (
+            glob.glob(f"{data_path}/permuted*") if dataset == 'train' 
+            else glob.glob(f"{data_path}/valid/original*") if dataset == 'validation' 
+            else glob.glob(f"{data_path}/test/original*")
         )
 
     fileIndex = max(map(lambda x: int(x.split(".")[-1]), writtenFiles))
     limitIndex = min(max_obs, fileIndex)
-    ds = TorchDataset(list(range(limitIndex)), tokenizer, data_loc=data_loc, dataset=dataset)
+    ds = TorchDataset(
+        list(range(limitIndex)),
+        tokenizer,
+        data_loc=data_loc,
+        dataset=dataset,
+        self_sample=self_sample
+    )
     dataloader = torch.utils.data.DataLoader(
         ds,
         batch_size=bs,
@@ -81,14 +96,14 @@ def wikiDataloader(
         return (
             torch.tensor(toks['input_ids']), 
             torch.tensor(toks['attention_mask'])
-            )
+        )
 
     ds = WikitextDataset(
         data_loc=f"{data_loc}/hf", 
         dataset=dataset,
         pct=100, 
         min_length=min_length
-        )
+    )
     dataloader = torch.utils.data.DataLoader(
         ds,
         batch_size=bs,

@@ -132,6 +132,8 @@ wandb/
 
 # Cache
 hf/
-data/
+data/*
 runs/
 models/
+eval/
+!data/self_sample.zip
