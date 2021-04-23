@@ -17,6 +17,7 @@ def loadOTSModel(cache_dir=None):
         'gpt2', cache_dir=f"{cache_dir}/hf" if cache_dir else None
         )
     tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
 
     return model, tokenizer
 
@@ -25,6 +26,7 @@ def loadTokenizer(cache_dir=None):
         'gpt2', cache_dir=f"{cache_dir}/hf" if cache_dir else None
         )
     tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
 
     return tokenizer
 
