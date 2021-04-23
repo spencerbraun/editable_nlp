@@ -130,7 +130,7 @@ def genModelText(finetuned, lm_tokens):
     edit_loc = max(random.randint(int(len_lm*0.6), int(len_lm*0.9)), 15)
     input_ids = lm_tokens[:, :edit_loc]
     input_size = input_ids.size()[-1]
-
+    
     finetuned.eval()
     print(f"generating, {DEVICE}")
     output_sequence = finetuned.generate(
@@ -142,9 +142,15 @@ def genModelText(finetuned, lm_tokens):
         num_return_sequences=10,
     )
 
+    edit_tokens = random.choice(output_sequence).unsqueeze(0)
+    edit_mask = torch.ones(edit_tokens.shape, dtype=torch.long)
+    edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
+    edit_labels[:, input_size:] = edit_tokens[:, input_size:]
+    gold_tokens = edit_tokens[:, input_size:]
+
     edit_labels = edit_labels.to(DEVICE)
     edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
-    edit_locs = torch.tensor([edit_loc + i for i in range(5)])
+    edit_locs = torch.tensor([edit_loc + i - 1 for i in range(5)])
 
     return edit_tokens, edit_mask, edit_labels, gold_tokens, edit_locs
 
@@ -249,7 +255,7 @@ def evalSelfSample(
 
     with open(saveloc, "w") as f:
         f.write("train_step,n_edit_steps,edit_step,logits,orig_ppl,new_ppl\n")
-        for train_step, lm_data in enumerate(dataloader):
+        for train_step, (lm_data, edit_example, _, _) in enumerate(dataloader):
             print(f"Val Step {train_step}")
             
             lm_tokens, lm_mask = lm_data
@@ -257,14 +263,20 @@ def evalSelfSample(
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
 
             edit_tokens, edit_mask = edit_example
+            # remove left padding
+            edit_tokens = edit_tokens.squeeze(0)
+            edit_tokens = edit_tokens[edit_tokens != 50256].unsqueeze(0)
+            edit_mask = edit_mask.squeeze(0)
+            edit_mask = edit_mask[edit_mask != 0].unsqueeze(0)
+
             edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
-            edit_loc = edit_tokens.shape[-1] - 5
+            edit_loc = edit_tokens.shape[-1] - 5 # - 1  # minus 1 for newline token
             edit_labels[:, edit_loc:] = edit_tokens[:, edit_loc:]
             gold_tokens = edit_tokens[:, edit_loc:]
 
             edit_labels = edit_labels.to(DEVICE)
             edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
-            edit_locs = torch.tensor([edit_loc + i for i in range(5)])
+            edit_locs = torch.tensor([edit_loc + i - 1 for i in range(5)])
 
             gold_tokens = gold_tokens.cpu()
 
@@ -277,7 +289,7 @@ def evalSelfSample(
                 edit_locs, 
                 gold_tokens,
                 n_edit_steps=n_edit_steps
-                )
+            )
 
             new_ppl = perplexity(model_out, dataloader)
 
@@ -448,7 +460,7 @@ if __name__ == "__main__":
             int(args.edit_steps),
             loc=loc,
             testset=args.test_set
-            )
+        )
     else:
          evalEditable(
             model,
@@ -457,4 +469,4 @@ if __name__ == "__main__":
             int(args.edit_steps),
             loc=loc,
             testset=args.test_set
-            )
+        )

@@ -201,12 +201,12 @@ class TorchDataset(torch.utils.data.Dataset):
 
         if self.self_sample:
             with open(f"{path}/original_text.{ID}") as orig:
-                original_text = orig.read()
+                original_text = orig.read()[:-1]
             with open(f"{path}/generated_text.{ID}") as gen:
-                generated_text = gen.read()
+                generated_text = gen.read()[:-1]
             
             raw, perm = self.tokenize([" "+original_text, " "+generated_text])
-            new_ent_tok, old_ent_tok = -1, -1
+            new_ent_tok, old_ent_tok = -1, -1  # unused
 
         else:
             with open(f"{path}/original_entities.{ID}") as raw:
@@ -279,11 +279,11 @@ def generateDataset(
         os.makedirs(wiki_loc)
 
     wikitext = load_dataset(
-            'wikitext', 
-            'wikitext-103-raw-v1', 
-            cache_dir=wiki_loc, 
-            split=f'{set}[:{pct}%]'
-        )
+        'wikitext', 
+        'wikitext-103-raw-v1', 
+        cache_dir=wiki_loc, 
+        split=f'{set}[:{pct}%]'
+    )
 
     random.seed(123)
     wiki_len = len(wikitext['text']) - 100
