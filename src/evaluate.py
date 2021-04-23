@@ -44,8 +44,8 @@ def getIndexedProbs(model, index, gold_tokens, sent_tokens):
     with torch.no_grad():
         output = model(sent_tokens)
         logits = output.logits[:,index,:].detach().cpu().squeeze(0) #squeeze batch size
-        if len(list(gold_tokens.shape)) == 1:
-            gold_tokens.unsqueeze_(1)
+        
+        gold_tokens = gold_tokens.flatten().unsqueeze_(1)
         logit_sum = torch.sum(logits.gather(1, gold_tokens))
 
     return logit_sum
@@ -89,6 +89,7 @@ def performOneEdit(
     logit_hist.append(
         getIndexedProbs(model, edit_locs, gold_tokens, edit_tokens)
     )
+    
     with higher.innerloop_ctx(
         model, 
         inner_opt, 
@@ -99,23 +100,23 @@ def performOneEdit(
         
         for edit_step in range(n_edit_steps):
 
-            loss = fmodel(
+            output = fmodel(
                 edit_tokens, 
                 attention_mask=edit_mask,
                 labels=edit_labels
-            ).loss
-            diffopt.step(loss)
-            
+            )
+            diffopt.step(output.loss)
+
             logit_hist.append(
                 getIndexedProbs(fmodel, edit_locs, gold_tokens, edit_tokens)
             )
 
             ll_change = (abs(logit_hist[0]) - abs(logit_hist[-1]))/abs(logit_hist[0])
-            print(f"Edit step {edit_step}; ll change {ll_change} , logit {logit_hist[-1]}")
+            
+            print(f"Edit step {edit_step}; ll change {ll_change} , logit {logit_hist[-1]}, loss {output.loss}")
             if ll_change >= 0.1:
                 break
             
-
         
         model.load_state_dict(fmodel.state_dict())
     
@@ -433,8 +434,7 @@ if __name__ == "__main__":
     parser.add_argument('--model_path', help='')
     parser.add_argument('--test_set', action='store_true')
     parser.add_argument('--self_sample', action='store_true')
-    parser.add_argument('--edit_steps', default=10, type=int)
-    parser.add_argument('--seq_edits', default=1, type=int)
+    parser.add_argument('--edit_steps', default=5) #edit_steps now act as max edit steps
     args = parser.parse_args()
 
     loc = utils.sailPreprocess()
