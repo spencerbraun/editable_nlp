@@ -316,11 +316,11 @@ def selfSampleDataset(
 ):
     data_loc = f"{writeDir}/data/self_sample"
     if set == 'train':
-        data_loc = os.path.jlin(data_loc, 'train')
+        data_loc = os.path.join(data_loc, 'train')
     elif set == 'validation':
         data_loc = os.path.join(data_loc, 'valid')
     elif set == 'test':
-        data_loc = os.path.jlin(data_loc, 'test')
+        data_loc = os.path.join(data_loc, 'test')
     if not os.path.exists(data_loc):
         os.makedirs(data_loc)
 
@@ -354,8 +354,15 @@ def selfSampleDataset(
 
     for idx, sent in enumerate(sampleText):
 
-        origFile = open(os.path.join(data_loc, f'original_text.{idx}'), 'w')
-        genFile = open(os.path.join(data_loc, f'generated_text.{idx}'), 'w')
+        origPath = os.path.join(data_loc, f'original_text.{idx}')
+        genPath = os.path.join(data_loc, f'generated_text.{idx}')
+
+        if os.path.exists(origPath) and os.path.exists(genPath):
+            print(f'Sample {idx} already exists')
+            continue
+
+        origFile = open(origPath, 'w')
+        genFile = open(genPath, 'w')
 
         orig_sent = sent.strip('\n').strip(" ")
         lm_tokens = torch.tensor(tokenizer(

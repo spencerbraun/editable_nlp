@@ -43,13 +43,13 @@ def retrieveEditDataloader(
     data_path = f"{data_loc}/data/self_sample" if self_sample else f"{data_loc}/data"
     if self_sample:
         writtenFiles = (
-            glob.glob(f"{data_path}/*") if dataset == 'train'
+            glob.glob(f"{data_path}/train/*") if dataset == 'train'
             else glob.glob(f"{data_path}/valid/*") if dataset == 'validation'
             else glob.glob(f"{data_path}/test/*")
         )
     else:
         writtenFiles = (
-            glob.glob(f"{data_path}/permuted*") if dataset == 'train' 
+            glob.glob(f"{data_path}/train/permuted*") if dataset == 'train' 
             else glob.glob(f"{data_path}/valid/original*") if dataset == 'validation' 
             else glob.glob(f"{data_path}/test/original*")
         )

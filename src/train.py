@@ -357,11 +357,8 @@ class SelfSampleTrainer(EditTrainer):
         edit_tokens, edit_mask = edit_tokens.to(self.device), edit_mask.to(self.device)
 
         return edit_tokens, edit_mask, edit_labels
-
-    def validateSelfSampleTraining(self):
-        self.model.eval()
-        lm_data, edit_example, _, _ = self.validation_set.dataset.__getitem__(self.val_iter % len(self.validation_set))
-
+    
+    def processLMData(self, lm_data, edit_example):
         lm_tokens, lm_mask = lm_data
         lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
         lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
@@ -383,6 +380,14 @@ class SelfSampleTrainer(EditTrainer):
         edit_tokens, edit_mask = edit_tokens.to(self.device), edit_mask.to(self.device)
 
         gold_tokens = gold_tokens.cpu()
+
+        return lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens
+
+    def validateSelfSampleTraining(self):
+        self.model.eval()
+        lm_data, edit_example, _, _ = self.validation_set.dataset.__getitem__(self.val_iter % len(self.validation_set))
+
+        lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = self.processLMData(lm_data, edit_example)
 
         orig_ppl = perplexity(self.model, self.validation_set)
         model_out, logit_hist, ll_change, loss = performOneEdit(
@@ -435,12 +440,15 @@ class SelfSampleTrainer(EditTrainer):
         for epoch in range(self.config.epochs):
             self.epoch = epoch
             
-            for train_step, lm_data in enumerate(self.data):
+            for train_step, (lm_data, edit_example, _, _) in enumerate(self.data):
+                '''
                 lm_tokens, lm_mask = lm_data
                 lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
                 lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
                 
                 edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens)
+                '''
+                lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = self.processLMData(lm_data, edit_example)
 
                 param_groups = [
                     {'params': p, 'lr': None} 
@@ -548,7 +556,7 @@ if __name__ == "__main__":
     loc = utils.sailPreprocess()
     tokenizer = utils.loadTokenizer(cache_dir=loc)
 
-    if not args.editable:
+    if not (args.editable or args.self_sample):
         dataloader = utils.wikiDataloader(
             tokenizer,
             bs=args.bs,
@@ -563,7 +571,8 @@ if __name__ == "__main__":
             tokenizer,
             data_loc=loc,
             bs=args.bs,
-            dataset='train'
+            dataset='train',
+            self_sample=args.self_sample
         )
 
     if args.editable:
