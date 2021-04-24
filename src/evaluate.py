@@ -122,7 +122,7 @@ def performOneEdit(
         
         model_.load_state_dict(fmodel.state_dict())
     
-    return model_, logit_hist
+    return model_, logit_hist, ll_change, output.loss
 
 def genModelText(finetuned, lm_tokens):
 
@@ -203,7 +203,7 @@ def evalEditable(
 
             orig_ppl = perplexity(model, dataloader)
 
-            model_out, logit_hist = performOneEdit(
+            model_out, logit_hist, ll_change, loss = performOneEdit(
                 model,
                 lrs,
                 edit_tokens, 
@@ -257,7 +257,7 @@ def evalSelfSample(
         f.write("train_step,n_edit_steps,edit_step,logits,orig_ppl,new_ppl\n")
         for train_step, (lm_data, edit_example, _, _) in enumerate(dataloader):
             print(f"Val Step {train_step}")
-            
+
             lm_tokens, lm_mask = lm_data
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
@@ -280,7 +280,7 @@ def evalSelfSample(
 
             gold_tokens = gold_tokens.cpu()
 
-            model_out, logit_hist = performOneEdit(
+            model_out, logit_hist, ll_change, loss = performOneEdit(
                 model,
                 lrs,
                 edit_tokens, 
