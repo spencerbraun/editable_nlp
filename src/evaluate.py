@@ -270,13 +270,13 @@ def evalSelfSample(
             edit_mask = edit_mask[edit_mask != 0].unsqueeze(0)
 
             edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
-            edit_loc = edit_tokens.shape[-1] - 5 # - 1  # minus 1 for newline token
-            edit_labels[:, edit_loc:] = edit_tokens[:, edit_loc:]
-            gold_tokens = edit_tokens[:, edit_loc:]
+            edit_loc = edit_tokens.shape[-1] - 5 - 1  # minus 1 for newline token
+            edit_locs = torch.tensor([edit_loc + i for i in range(5)])
+            edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
+            gold_tokens = edit_tokens[:, edit_locs]
 
             edit_labels = edit_labels.to(DEVICE)
             edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
-            edit_locs = torch.tensor([edit_loc + i - 1 for i in range(5)])
 
             gold_tokens = gold_tokens.cpu()
 
@@ -286,7 +286,7 @@ def evalSelfSample(
                 edit_tokens, 
                 edit_mask, 
                 edit_labels,
-                edit_locs, 
+                edit_locs - 1, 
                 gold_tokens,
                 n_edit_steps=n_edit_steps
             )

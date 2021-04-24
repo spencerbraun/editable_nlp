@@ -201,9 +201,9 @@ class TorchDataset(torch.utils.data.Dataset):
 
         if self.self_sample:
             with open(f"{path}/original_text.{ID}") as orig:
-                original_text = orig.read()[:-1]
+                original_text = orig.read()
             with open(f"{path}/generated_text.{ID}") as gen:
-                generated_text = gen.read()[:-1]
+                generated_text = gen.read()
             
             raw, perm = self.tokenize([" "+original_text, " "+generated_text])
             new_ent_tok, old_ent_tok = -1, -1  # unused
@@ -268,7 +268,7 @@ def generateDataset(
     sample=int(1e6),
     set='train', 
     pct='10'
-    ):
+):
 
     data_loc = f"{writeDir}/data/{set}"
     if not os.path.exists(data_loc):
