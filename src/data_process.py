@@ -194,7 +194,9 @@ class TorchDataset(torch.utils.data.Dataset):
         if self.self_sample:
             path = os.path.join(path, 'self_sample')
 
-        if self.dataset == 'validation':
+        if self.dataset == 'train':
+            path = os.path.join(path, 'train')
+        elif self.dataset == 'validation':
             path = os.path.join(path, 'valid')
         elif self.dataset == 'test':
             path = os.path.join(path, 'test')
@@ -313,7 +315,9 @@ def selfSampleDataset(
     pct='10'
 ):
     data_loc = f"{writeDir}/data/self_sample"
-    if set == 'validation':
+    if set == 'train':
+        data_loc = os.path.jlin(data_loc, 'train')
+    elif set == 'validation':
         data_loc = os.path.join(data_loc, 'valid')
     elif set == 'test':
         data_loc = os.path.jlin(data_loc, 'test')
