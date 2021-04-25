@@ -373,7 +373,7 @@ def selfSampleDataset(
         )['input_ids'], device=DEVICE)
         lm_tokens = lm_tokens[lm_tokens != 50256]
         len_lm = lm_tokens.shape[-1]
-        edit_loc = max(random.randint(int(len_lm*0.6), int(len_lm*0.9)), 15)
+        edit_loc = max(random.randint(int(len_lm*0.5), int(len_lm*0.8)), 15)
         input_ids = lm_tokens[:edit_loc]
         input_size = input_ids.size()[-1]
 
