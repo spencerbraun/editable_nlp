@@ -441,13 +441,7 @@ class SelfSampleTrainer(EditTrainer):
             self.epoch = epoch
             
             for train_step, (lm_data, edit_example, _, _) in enumerate(self.data):
-                '''
-                lm_tokens, lm_mask = lm_data
-                lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
-                lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
-                
-                edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens)
-                '''
+
                 lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = self.processLMData(lm_data, edit_example)
 
                 param_groups = [
