@@ -265,6 +265,8 @@ def evalSelfSample(
 
     orig_ppl = perplexity(model, dataloader)
 
+    orig_ppl = perplexity(model, dataloader)
+
     with open(saveloc, "w") as f:
         f.write("train_step,n_edit_steps,edit_step,logits,orig_ppl,new_ppl\n")
         for train_step, lm_data in enumerate(dataloader):
