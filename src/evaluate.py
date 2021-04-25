@@ -121,7 +121,7 @@ def performOneEdit(
         
         model.load_state_dict(fmodel.state_dict())
     
-    return model_, logit_hist
+    return model, logit_hist
 
 def genModelText(finetuned, lm_tokens):
         
@@ -281,7 +281,7 @@ def evalSelfSample(
             gold_tokens = gold_tokens.cpu()
 
             model_out, logit_hist = performOneEdit(
-                model,
+                model_edited,
                 lrs,
                 edit_tokens, 
                 edit_mask, 
@@ -290,6 +290,13 @@ def evalSelfSample(
                 gold_tokens,
                 n_edit_steps=n_edit_steps
                 )
+
+            if (edit_number < seq_edits) & sequential:
+                edit_number += 1
+            else:
+                edit_number = 1
+                if sequential:
+                    model_edited.load_state_dict(model.state_dict())
 
             new_ppl = perplexity(model_out, dataloader)
 
@@ -435,7 +442,8 @@ if __name__ == "__main__":
     parser.add_argument('--model_path', help='')
     parser.add_argument('--test_set', action='store_true')
     parser.add_argument('--self_sample', action='store_true')
-    parser.add_argument('--edit_steps', default=5) #edit_steps now act as max edit steps
+    parser.add_argument('--edit_steps', default=5, type=int)
+    parser.add_argument('--seq_edits', default=1, type=int)
     args = parser.parse_args()
 
     loc = utils.sailPreprocess()
