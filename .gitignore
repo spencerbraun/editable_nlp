@@ -136,6 +136,7 @@ slurm*
 # Cache
 hf/
 data/
+data_all/
 runs/
 models/
 eval/

@@ -416,7 +416,7 @@ if __name__ == "__main__":
             # process=True,
             sample=int(2e6),
             set='train', 
-            pct='100'
+            pct='5'
         )
     
     if args.valid:
