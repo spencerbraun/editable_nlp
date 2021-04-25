@@ -26,7 +26,7 @@ def filterText(iterator):
 
     valid  = []
     for text in iterator:
-        if len(text) < 100:
+        if len(text.split(' ')) < 50:
             continue
         if not is_ascii(text):
             continue
@@ -341,7 +341,7 @@ def selfSampleDataset(
         passage_idxs = list(range(wiki_len))
     else:
         passage_idxs = random.sample(range(1, wiki_len), sample)
-    res_list = list(itemgetter(*passage_idxs)(wikitext['text'])) 
+    res_list = list(itemgetter(*passage_idxs)(wikitext['text']))
     sampleText = filterText(res_list)
 
     finetuned, tokenizer = utils.loadTrainedModel(
