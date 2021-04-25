@@ -258,19 +258,20 @@ def evalSelfSample(
         print("!!!!!!!!!No learning rates found!!!!!!!!!")
         lrs = []
     
-    edit_number = 1
+    edit_number = 0
+    model_number = 0
     sequential = seq_edits > 1
     if sequential:
         model_edited = copy.deepcopy(model)
 
     orig_ppl = perplexity(model, dataloader)
 
-    orig_ppl = perplexity(model, dataloader)
-
     with open(saveloc, "w") as f:
-        f.write("train_step,n_edit_steps,edit_step,logits,orig_ppl,new_ppl\n")
+        f.write("model_number,train_step,n_edit_steps,edit_step,logits,orig_ppl,new_ppl\n")
         for train_step, lm_data in enumerate(dataloader):
             print(f"Val Step {train_step}")
+            print(f"Edit number {edit_number}")
+            print(f"Model number {model_number}")
             
             lm_tokens, lm_mask = lm_data
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
@@ -282,7 +283,7 @@ def evalSelfSample(
                 
             gold_tokens = gold_tokens.cpu()
 
-            model_out, logit_hist = performOneEdit(
+            model_edited, logit_hist = performOneEdit(
                 model_edited,
                 lrs,
                 edit_tokens, 
@@ -293,20 +294,22 @@ def evalSelfSample(
                 n_edit_steps=n_edit_steps
                 )
 
-            if (edit_number < seq_edits) & sequential:
-                edit_number += 1
-            else:
-                edit_number = 1
-                if sequential:
-                    model_edited.load_state_dict(model.state_dict())
+            new_ppl = perplexity(model_edited, dataloader)
 
-            new_ppl = perplexity(model_out, dataloader)
 
             for idx, val in enumerate(logit_hist):
-                run = (train_step, n_edit_steps, idx, val, orig_ppl, new_ppl)
+                run = (model_number,train_step, n_edit_steps, idx, val, orig_ppl, new_ppl)
                 form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
                 writeStr = ",".join([form(x) for x in run])
                 f.write(f"{writeStr}\n")
+
+             if (edit_number < seq_edits) & sequential:
+                 edit_number += 1
+             else:
+                 edit_number = 1
+                 model_number += 1
+                 if sequential:
+                     model_edited.load_state_dict(model.state_dict())
 
             n_edits +=1 
             if n_edits >= (100 * seq_edits):
