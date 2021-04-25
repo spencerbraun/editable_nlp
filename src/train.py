@@ -366,9 +366,10 @@ class SelfSampleTrainer(EditTrainer):
         edit_tokens, edit_mask = edit_example
         # remove left padding
         edit_tokens = edit_tokens.squeeze(0)
-        edit_tokens = edit_tokens[edit_tokens != 50256].unsqueeze(0)
+        indices = edit_tokens != 50256
+        edit_tokens = edit_tokens[indices].unsqueeze(0)
         edit_mask = edit_mask.squeeze(0)
-        edit_mask = edit_mask[edit_mask != 0].unsqueeze(0)
+        edit_mask = edit_mask[indices].unsqueeze(0)
 
         edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
         edit_loc = edit_tokens.shape[-1] - 5 - 1  # minus 1 for newline token
