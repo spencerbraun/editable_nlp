@@ -33,13 +33,13 @@ class EditConfig:
 class SelfSampleConfig:
     def __init__(self):
         self.task = 'self_sample'
-        self.inner_lr = 1e-3
+        self.inner_lr = 1e-2
         self.outer_lr = 1e-5
         self.epochs = 1
         self.max_iter = 20000
         self.n_edit_steps = 1
         self.cedit = 0.5
-        self.cloc = 5
+        self.cloc = 1
         self.learnable_lr = True
         self.lr_lr = 1e-3
 
