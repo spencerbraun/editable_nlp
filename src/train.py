@@ -13,9 +13,11 @@ import transformers
 import higher
 import wandb
 
+from torch.utils.data import Subset
+
 import utils
 from config import TrainConfig, EditConfig, SelfSampleConfig
-from evaluate import performOneEdit, perplexity
+from evaluate import performOneEdit
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -168,6 +170,24 @@ class EditTrainer(BaseTrainer):
                 break
         
         self.model.train()
+
+    def perplexity(self, model, data):
+        total_loss = []
+        model.to(DEVICE)
+        model.eval()
+        with torch.no_grad():
+            indices = [idx % len(data) for idx in range(self.val_iter, self.val_iter + 100)]  # select 100 elements
+            subset = Subset(data.dataset, indices)
+            for batch_idx, (lm_data, edit_example, _, _) in enumerate(subset):
+                lm_tokens, lm_mask = lm_data
+                lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
+                lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
+                out = model(lm_tokens, labels=lm_labels)
+
+                loss = out.loss
+                total_loss.append(loss)
+
+        return torch.exp(torch.mean(torch.stack(total_loss)))
 
     def run(self):
 
@@ -366,9 +386,10 @@ class SelfSampleTrainer(EditTrainer):
         edit_tokens, edit_mask = edit_example
         # remove left padding
         edit_tokens = edit_tokens.squeeze(0)
-        edit_tokens = edit_tokens[edit_tokens != 50256].unsqueeze(0)
+        indices = edit_tokens != 50256
+        edit_tokens = edit_tokens[indices].unsqueeze(0)
         edit_mask = edit_mask.squeeze(0)
-        edit_mask = edit_mask[edit_mask != 0].unsqueeze(0)
+        edit_mask = edit_mask[indices].unsqueeze(0)
 
         edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
         edit_loc = edit_tokens.shape[-1] - 5 - 1  # minus 1 for newline token
@@ -385,30 +406,45 @@ class SelfSampleTrainer(EditTrainer):
 
     def validateSelfSampleTraining(self):
         self.model.eval()
-        lm_data, edit_example, _, _ = self.validation_set.dataset.__getitem__(self.val_iter % len(self.validation_set))
 
-        lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = self.processLMData(lm_data, edit_example)
+        for ds in ['train', 'val']:
+            data = self.validation_set if ds == 'val' else self.data
 
-        orig_ppl = perplexity(self.model, self.validation_set)
-        model_out, logit_hist, ll_change, loss = performOneEdit(
-            self.model,
-            self.lrs,
-            edit_tokens, 
-            edit_mask, 
-            edit_labels,
-            edit_locs - 1, 
-            gold_tokens, 
-            n_edit_steps=1
-        )
-        new_ppl = perplexity(model_out, self.validation_set)
+            ppl_pre_hist = []
+            ppl_post_hist = []
+            ll_change_hist = []
+            loss_hist = []
 
-        metrics = {
-            'ppl_pre': orig_ppl,
-            'ppl_post': new_ppl,
-            'll_change': ll_change,
-            'loss/val': loss,
-        }
-        self.wandb_log(self.val_iter * 100, metrics)
+            indices = [idx % len(data) for idx in range(self.val_iter, self.val_iter + 10)]  # select 10 elements
+            subset = Subset(data.dataset, indices)
+            for batch_idx, (lm_data, edit_example, _, _) in enumerate(subset):
+                lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = self.processLMData(lm_data, edit_example)
+
+                orig_ppl = self.perplexity(self.model, data)
+                model_out, logit_hist, ll_change, loss = performOneEdit(
+                    self.model,
+                    self.lrs,
+                    edit_tokens, 
+                    edit_mask, 
+                    edit_labels,
+                    edit_locs - 1, 
+                    gold_tokens, 
+                    n_edit_steps=1
+                )
+                new_ppl = self.perplexity(model_out, data)
+
+                ppl_pre_hist.append(orig_ppl.cpu())
+                ppl_post_hist.append(new_ppl.cpu())
+                ll_change_hist.append(ll_change)
+                loss_hist.append(loss.detach().cpu())
+
+            metrics = {
+                f'ppl_pre_{ds}': np.mean(ppl_pre_hist),
+                f'ppl_post_{ds}': np.mean(ppl_post_hist),
+                f'll_change_{ds}': np.mean(ll_change_hist),
+                f'loss/eval_{ds}': np.mean(loss_hist),
+            }
+            self.wandb_log(self.val_iter * 100, metrics)
 
         self.val_iter += 1
 
