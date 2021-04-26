@@ -177,7 +177,7 @@ class EditTrainer(BaseTrainer):
         model.eval()
         with torch.no_grad():
             indices = [idx % len(data) for idx in range(self.val_iter, self.val_iter + 100)]  # select 100 elements
-            subset = Subset(dataloader.dataset, indices)
+            subset = Subset(data.dataset, indices)
             for batch_idx, (lm_data, edit_example, _, _) in enumerate(subset):
                 lm_tokens, lm_mask = lm_data
                 lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
@@ -416,7 +416,7 @@ class SelfSampleTrainer(EditTrainer):
             loss_hist = []
 
             indices = [idx % len(data) for idx in range(self.val_iter, self.val_iter + 10)]  # select 10 elements
-            subset = Subset(dataloader.dataset, indices)
+            subset = Subset(data.dataset, indices)
             for batch_idx, (lm_data, edit_example, _, _) in enumerate(subset):
                 lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = self.processLMData(lm_data, edit_example)
 
