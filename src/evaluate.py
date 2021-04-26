@@ -294,7 +294,10 @@ def evalSelfSample(
                 n_edit_steps=n_edit_steps
                 )
 
-            new_ppl = perplexity(model_edited, dataloader)
+            if edit_number + 1 % 20 == 0:
+                new_ppl = perplexity(model_edited, dataloader)
+            else:
+                new_ppl = ""
 
 
             for idx, val in enumerate(logit_hist):
@@ -303,16 +306,16 @@ def evalSelfSample(
                 writeStr = ",".join([form(x) for x in run])
                 f.write(f"{writeStr}\n")
 
-             if (edit_number < seq_edits) & sequential:
-                 edit_number += 1
-             else:
-                 edit_number = 1
-                 model_number += 1
-                 if sequential:
-                     model_edited.load_state_dict(model.state_dict())
+            if (edit_number < seq_edits) & sequential:
+                edit_number += 1
+            else:
+                edit_number = 1
+                model_number += 1
+                if sequential:
+                    model_edited.load_state_dict(model.state_dict())
 
             n_edits +=1 
-            if n_edits >= (100 * seq_edits):
+            if n_edits >= (5 * seq_edits):
                 break
 
 
