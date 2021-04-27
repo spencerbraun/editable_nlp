@@ -2,6 +2,7 @@ import random
 import copy 
 import argparse
 import os
+import shutil
 from datetime import datetime
 
 import glob
@@ -21,6 +22,10 @@ import matplotlib.pyplot as plt
 from IPython.display import display
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+def get_params(model):
+    return torch.cat([p.view(-1) for p in model.parameters()])
+
 
 def perplexity(model, dataloader):
     total_loss = []
@@ -235,11 +240,12 @@ def evalSelfSample(
     n_edit_steps,
     seq_edits=1,
     loc="..",
-    testset=False
+    testset=False,
+    copy_to=""
     ):
 
     finetuned = utils.loadTrainedModel(
-        f"{loc}/models/finetune/gpt2_epoch0_ts10000.20210408.09.04.1617899457", 
+        f"/juice/scr/spencerb/editable_nlp/models/finetune/gpt2_epoch0_ts10000.20210408.09.04.1617899457", 
         cache_dir=loc,
         tokenizer=False
     )
@@ -265,9 +271,10 @@ def evalSelfSample(
         model_edited = copy.deepcopy(model)
 
     orig_ppl = perplexity(model, dataloader)
+    params0 = get_params(model)
 
     with open(saveloc, "w") as f:
-        f.write("model_number,train_step,n_edit_steps,edit_step,logits,orig_ppl,new_ppl\n")
+        f.write("model_number,edit_number,train_step,n_edit_steps,edit_step,logits,orig_ppl,new_ppl,norm\n")
         for train_step, lm_data in enumerate(dataloader):
             print(f"Val Step {train_step}")
             print(f"Edit number {edit_number}")
@@ -294,14 +301,15 @@ def evalSelfSample(
                 n_edit_steps=n_edit_steps
                 )
 
-            if edit_number + 1 % 20 == 0:
+            if (edit_number + 1) % 20 == 0:
                 new_ppl = perplexity(model_edited, dataloader)
             else:
                 new_ppl = ""
 
-
+            norm_diff = params0.sub(get_params(model_edited)).norm().item()
             for idx, val in enumerate(logit_hist):
-                run = (model_number,train_step, n_edit_steps, idx, val, orig_ppl, new_ppl)
+                run = (model_number,edit_number,train_step, n_edit_steps, idx, val, orig_ppl,
+                new_ppl, norm_diff)
                 form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
                 writeStr = ",".join([form(x) for x in run])
                 f.write(f"{writeStr}\n")
@@ -317,7 +325,8 @@ def evalSelfSample(
             n_edits +=1 
             if n_edits >= (5 * seq_edits):
                 break
-
+    if copy_to:
+        shutil.copyfile(saveloc, f"{copy_to}/{filename}")
 
 class ModelComps:
     def __init__(self, model_name, base_name, loc="..", archive=False, test=False):
@@ -452,6 +461,7 @@ if __name__ == "__main__":
     parser.add_argument('--self_sample', action='store_true')
     parser.add_argument('--edit_steps', default=5, type=int)
     parser.add_argument('--seq_edits', default=1, type=int)
+    parser.add_argument('--copy_to')
     args = parser.parse_args()
 
     loc = utils.sailPreprocess()
@@ -473,7 +483,8 @@ if __name__ == "__main__":
             int(args.edit_steps),
             seq_edits=args.seq_edits,
             loc=loc,
-            testset=args.test_set
+            testset=args.test_set,
+            copy_to=args.copy_to
             )
     else:
          evalEditable(
