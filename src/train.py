@@ -13,8 +13,11 @@ import transformers
 import higher
 import wandb
 
+from torch.utils.data import Subset
+
 import utils
 from config import TrainConfig, EditConfig, SelfSampleConfig
+from evaluate import performOneEdit
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -108,7 +111,7 @@ class BaseTrainer:
             for train_step, lm_data in enumerate(self.data):
                 
                 lm_tokens, lm_mask = lm_data
-                lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
+                lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
                 lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
                 
                 base_out = self.model(
@@ -148,10 +151,10 @@ class EditTrainer(BaseTrainer):
     def validateEditTraining(self):
         self.model.eval()
         iters = 0
+
         for train_step, lm_data in enumerate(self.validation_set):
-                
             lm_tokens, lm_mask = lm_data
-            lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
+            lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
             
             base_out = self.model(
@@ -167,7 +170,25 @@ class EditTrainer(BaseTrainer):
                 break
         
         self.model.train()
-    
+
+    def perplexity(self, model, data):
+        total_loss = []
+        model.to(DEVICE)
+        model.eval()
+        with torch.no_grad():
+            indices = [idx % len(data) for idx in range(self.val_iter, self.val_iter + 100)]  # select 100 elements
+            subset = Subset(data.dataset, indices)
+            for batch_idx, (lm_data, edit_example, _, _) in enumerate(subset):
+                lm_tokens, lm_mask = lm_data
+                lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
+                lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
+                out = model(lm_tokens, labels=lm_labels)
+
+                loss = out.loss
+                total_loss.append(loss)
+
+        return torch.exp(torch.mean(torch.stack(total_loss)))
+
     def run(self):
 
         if not self.config.debug:
@@ -183,11 +204,11 @@ class EditTrainer(BaseTrainer):
         global_iter = 0
         print("Starting Training")
 
-        lrs = [
+        self.lrs = [
             torch.nn.Parameter(torch.tensor(self.config.inner_lr)) 
             for p in self.model.transformer.h[-3:].parameters()
             ]
-        lr_opt = torch.optim.Adam(lrs, lr=self.config.lr_lr)
+        lr_opt = torch.optim.Adam(self.lrs, lr=self.config.lr_lr)
 
         for epoch in range(self.config.epochs):
             self.epoch = epoch
@@ -231,7 +252,7 @@ class EditTrainer(BaseTrainer):
                 with higher.innerloop_ctx(
                     self.model, 
                     inner_opt, 
-                    override={'lr': lrs} if self.config.learnable_lr else None,
+                    override={'lr': self.lrs} if self.config.learnable_lr else None,
                     copy_initial_weights=False, 
                     track_higher_grads=True
                     ) as (fmodel, diffopt):
@@ -313,7 +334,15 @@ class EditTrainer(BaseTrainer):
 
 class SelfSampleTrainer(EditTrainer):
     def __init__(self, config, dataloader, model_path=None):
-        super().__init__(config, dataloader, model_path) 
+        super().__init__(config, dataloader, model_path)
+
+        self.validation_set = utils.retrieveEditDataloader(
+            self.tokenizer,
+            bs=1,
+            data_loc=self.config.write_loc,
+            dataset='validation',
+            self_sample=True
+        )
         
         self.finetuned = utils.loadTrainedModel(
             f"{self.config.write_loc}/models/finetune/{self.config.ft_model_name}", 
@@ -348,7 +377,78 @@ class SelfSampleTrainer(EditTrainer):
         edit_tokens, edit_mask = edit_tokens.to(self.device), edit_mask.to(self.device)
 
         return edit_tokens, edit_mask, edit_labels
+    
+    def processLMData(self, lm_data, edit_example):
+        lm_tokens, lm_mask = lm_data
+        lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
+        lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
 
+        edit_tokens, edit_mask = edit_example
+        # remove left padding
+        edit_tokens = edit_tokens.squeeze(0)
+        indices = edit_tokens != 50256
+        edit_tokens = edit_tokens[indices].unsqueeze(0)
+        edit_mask = edit_mask.squeeze(0)
+        edit_mask = edit_mask[indices].unsqueeze(0)
+
+        edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
+        edit_loc = edit_tokens.shape[-1] - 5 - 1  # minus 1 for newline token
+        edit_locs = torch.tensor([edit_loc + i for i in range(5)])
+        edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
+        gold_tokens = edit_tokens[:, edit_locs]
+
+        edit_labels = edit_labels.to(self.device)
+        edit_tokens, edit_mask = edit_tokens.to(self.device), edit_mask.to(self.device)
+
+        gold_tokens = gold_tokens.cpu()
+
+        return lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens
+
+    def validateSelfSampleTraining(self):
+        self.model.eval()
+
+        for ds in ['train', 'val']:
+            data = self.validation_set if ds == 'val' else self.data
+
+            ppl_pre_hist = []
+            ppl_post_hist = []
+            ll_change_hist = []
+            loss_hist = []
+
+            indices = [idx % len(data) for idx in range(self.val_iter, self.val_iter + 10)]  # select 10 elements
+            subset = Subset(data.dataset, indices)
+            for batch_idx, (lm_data, edit_example, _, _) in enumerate(subset):
+                lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = self.processLMData(lm_data, edit_example)
+
+                orig_ppl = self.perplexity(self.model, data)
+                model_out, logit_hist, ll_change, loss = performOneEdit(
+                    self.model,
+                    self.lrs,
+                    edit_tokens, 
+                    edit_mask, 
+                    edit_labels,
+                    edit_locs - 1, 
+                    gold_tokens, 
+                    n_edit_steps=1
+                )
+                new_ppl = self.perplexity(model_out, data)
+
+                ppl_pre_hist.append(orig_ppl.cpu())
+                ppl_post_hist.append(new_ppl.cpu())
+                ll_change_hist.append(ll_change)
+                loss_hist.append(loss.detach().cpu())
+
+            metrics = {
+                f'ppl_pre_{ds}': np.mean(ppl_pre_hist),
+                f'ppl_post_{ds}': np.mean(ppl_post_hist),
+                f'll_change_{ds}': np.mean(ll_change_hist),
+                f'loss/eval_{ds}': np.mean(loss_hist),
+            }
+            self.wandb_log(self.val_iter * 100, metrics)
+
+        self.val_iter += 1
+
+        self.model.train()
     
     def run(self):
         
@@ -365,23 +465,20 @@ class SelfSampleTrainer(EditTrainer):
         global_iter = 0
         print("Starting Training")
         
-        lrs = [
+        self.lrs = [
             torch.nn.Parameter(torch.tensor(self.config.inner_lr)) 
             for p in self.model.transformer.h[-3:].parameters()
             ]
-        lr_opt = torch.optim.Adam(lrs, lr=self.config.lr_lr)
+        lr_opt = torch.optim.Adam(self.lrs, lr=self.config.lr_lr)
 
         skip_count = 0
 
         for epoch in range(self.config.epochs):
             self.epoch = epoch
             
-            for train_step, lm_data in enumerate(self.data):
-                lm_tokens, lm_mask = lm_data
-                lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
-                lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
-                
-                edit_tokens, edit_mask, edit_labels = self.genModelText(lm_tokens)
+            for train_step, (lm_data, edit_example, _, _) in enumerate(self.data):
+
+                lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = self.processLMData(lm_data, edit_example)
 
                 param_groups = [
                     {'params': p, 'lr': None} 
@@ -398,7 +495,7 @@ class SelfSampleTrainer(EditTrainer):
                 with higher.innerloop_ctx(
                     self.model, 
                     inner_opt, 
-                    override={'lr': lrs} if self.config.learnable_lr else None,
+                    override={'lr': self.lrs} if self.config.learnable_lr else None,
                     copy_initial_weights=False, 
                     track_higher_grads=True
                     ) as (fmodel, diffopt):
@@ -459,21 +556,24 @@ class SelfSampleTrainer(EditTrainer):
                 
                 loss_dict = {
                     "loss/base": l_base, "loss/edit": l_edit, 
-                    "loss/loc": l_loc, "loss/total": total_loss
+                    "loss/loc": l_loc, "loss/train": total_loss
                     }
                 self.echo(train_step, **loss_dict)
-                loss_dict.update({f"lr/lr{i}":lr.data.item() for i, lr in enumerate(lrs)})
+                loss_dict.update({f"lr/lr{i}":lr.data.item() for i, lr in enumerate(self.lrs)})
                 self.wandb_log(global_iter, loss_dict)
                 self.saveState(self.model, global_iter, name="self_sample")
                 if self.config.learnable_lr:
-                    self.saveState(lrs, global_iter, name='lr')
+                    self.saveState(self.lrs, global_iter, name='lr')
                 if global_iter >= self.config.max_iter:
                     print("Reached max iterations")
                     break
+            
+                if (train_step % 100 == 0) & (not self.config.debug):
+                    self.validateSelfSampleTraining()
         
         self.saveState(self.model, global_iter, final=True, name="self_sample")
         if self.config.learnable_lr:
-                self.saveState(lrs, global_iter, final=True, name='lr')
+            self.saveState(self.lrs, global_iter, final=True, name='lr')
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -486,7 +586,7 @@ if __name__ == "__main__":
     loc = utils.sailPreprocess()
     tokenizer = utils.loadTokenizer(cache_dir=loc)
 
-    if not args.editable:
+    if not (args.editable or args.self_sample):
         dataloader = utils.wikiDataloader(
             tokenizer,
             bs=args.bs,
@@ -501,7 +601,8 @@ if __name__ == "__main__":
             tokenizer,
             data_loc=loc,
             bs=args.bs,
-            dataset='train'
+            dataset='train',
+            self_sample=args.self_sample
         )
 
     if args.editable:

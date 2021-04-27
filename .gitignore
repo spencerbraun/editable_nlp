@@ -130,8 +130,14 @@ dmypy.json
 # W&B logging
 wandb/
 
+# Slurm logs
+slurm*
+
 # Cache
 hf/
 data/
+data_all/
 runs/
 models/
+eval/
+
