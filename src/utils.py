@@ -160,7 +160,12 @@ def sailPreprocess(debug=False):
         os.mkdir(f"{save_loc}/{user}/errors")
         os.mkdir(f"{save_loc}/{user}/eval")
         os.mkdir(f"{save_loc}/{user}/hf")
-
+        copyfile(
+            "/juice/scr/spencerb/editable_nlp/self_sample.zip", 
+            f"{local_dir}/self_sample.zip"
+            )
+        with zipfile.ZipFile(f"{local_dir}/self_sample.zip") as zf:
+            zf.extractall(f"{local_dir}")
     else:
         save_loc = "/iris/u"
         local_dir = f"{save_loc}/{user}/code/editable_nlp"

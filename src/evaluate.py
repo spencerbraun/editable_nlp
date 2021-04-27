@@ -119,9 +119,6 @@ def performOneEdit(
             ll_change = (abs(logit_hist[0]) - abs(logit_hist[-1]))/abs(logit_hist[0])
             print(f"logit history: {logit_hist}")
             print(f"Edit step {edit_step}; ll change {ll_change} , logit {logit_hist[-1]}, loss {output.loss}")
-            if ll_change >= 0.1:
-                break
-            
         
         model.load_state_dict(fmodel.state_dict())
     
@@ -265,10 +262,10 @@ def evalSelfSample(
     orig_params = get_params(model)
 
     with open(saveloc, "w") as f:
-        f.write((
-            "model_number,edit_number,train_step,n_edit_steps,edit_step,",
+        f.write(
+            "model_number,edit_number,train_step,n_edit_steps,edit_step,"
             "logits,orig_ppl,new_ppl,norm\n"
-            ))
+            )
         for train_step, (lm_data, edit_example, _, _) in enumerate(dataloader):
             print(f"Val Step {train_step}")
             print(f"Edit number {edit_number}")
