@@ -26,7 +26,6 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 def get_params(model):
     return torch.cat([p.view(-1) for p in model.parameters()])
 
-
 def perplexity(model, dataloader):
     total_loss = []
     model.to(DEVICE)
@@ -253,28 +252,30 @@ def evalSelfSample(
     
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
     filename = f"edit_success_{timestamp}_{os.path.basename(model_name)}"
-    
-    model.to(DEVICE)
-    n_edits = 0
     saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}" 
 
     try: 
         lrs = loadLr(model_name)
     except AttributeError:
-        print("!!!!!!!!!No learning rates found!!!!!!!!!")
+        print("No learning rates found!")
         lrs = []
     
+    n_edits = 0
     edit_number = 0
     model_number = 0
     sequential = seq_edits > 1
-    if sequential:
-        model_edited = copy.deepcopy(model)
+    
+    model.to(DEVICE)
+    model_edited = copy.deepcopy(model)
 
     orig_ppl = perplexity(model, dataloader)
-    params0 = get_params(model)
+    orig_params = get_params(model)
 
     with open(saveloc, "w") as f:
-        f.write("model_number,edit_number,train_step,n_edit_steps,edit_step,logits,orig_ppl,new_ppl,norm\n")
+        f.write((
+            "model_number,edit_number,train_step,n_edit_steps,edit_step,",
+            "logits,orig_ppl,new_ppl,norm\n"
+            ))
         for train_step, lm_data in enumerate(dataloader):
             print(f"Val Step {train_step}")
             print(f"Edit number {edit_number}")
@@ -306,21 +307,23 @@ def evalSelfSample(
             else:
                 new_ppl = ""
 
-            norm_diff = params0.sub(get_params(model_edited)).norm().item()
+            norm_diff = orig_params.sub(get_params(model_edited)).norm().item()
+
             for idx, val in enumerate(logit_hist):
-                run = (model_number,edit_number,train_step, n_edit_steps, idx, val, orig_ppl,
-                new_ppl, norm_diff)
+                run = (
+                    model_number,edit_number,train_step, n_edit_steps, idx, val, 
+                    orig_ppl,new_ppl, norm_diff
+                    )
                 form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
                 writeStr = ",".join([form(x) for x in run])
                 f.write(f"{writeStr}\n")
 
-            if (edit_number < seq_edits) & sequential:
+            if edit_number < (seq_edits - 1):
                 edit_number += 1
             else:
-                edit_number = 1
+                edit_number = 0
                 model_number += 1
-                if sequential:
-                    model_edited.load_state_dict(model.state_dict())
+                model_edited.load_state_dict(model.state_dict())
 
             n_edits +=1 
             if n_edits >= (5 * seq_edits):
