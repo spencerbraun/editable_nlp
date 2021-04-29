@@ -6,7 +6,7 @@ from torch.nn import init
 
 class ConditionedLinear(nn.Module):
     @staticmethod
-    def make_editable(model: nn.Module, mode: str = "ip") -> nn.Module:
+    def add_conditioners(model: nn.Module, mode: str = "ip") -> nn.Module:
         """After calling this with an input model, you can use the function
         `model.set_editing(edit_mode)` with `edit_mode=True/False` to enable/disable
         editing.
