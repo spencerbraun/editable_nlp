@@ -77,9 +77,6 @@ class DataProcessor:
                 if not os.path.exists(self.write_dir):
                     os.makedirs(self.write_dir)
                     print(f"Warning: {self.write_dir} does not exist. Creating...")
-                # permuteFile = open(self.write_dir + f'/permuted_entities.{idx}', 'w')
-                # origFile = open(self.write_dir + f'/original_entities.{idx}', 'w')
-                # entFile = open(self.write_dir + f'/entity_swaps.{idx}', 'w')
 
             eligible = list(filter(lambda x: x[3] in self.keep_ents, ents))
             orig_ent = random.choice(eligible)
@@ -92,15 +89,6 @@ class DataProcessor:
             prefix = sent[:start]
             suffix = sent[end:]
             new_sent = prefix + replace_ent + suffix
-
-            # if self.write_dir:
-                # permuteFile.write(new_sent + "\n")
-                # origFile.write(self.raw_texts[idx].strip('\n').strip(" ") + "\n")
-                # entFile.write(f"{orig_ent[0]}|{replace_ent}\n")
-
-                # permuteFile.close()
-                # origFile.close()
-                # entFile.close()
 
             self.output_dict[idx] = {
                 'original': self.raw_texts[idx].strip('\n').strip(" "),
@@ -263,6 +251,106 @@ class WikitextDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         
         return self.filtered[index]
+
+class LAMADataset(torch.utils.data.Dataset):
+    def __init__(
+        self, 
+        data_loc=".", 
+        template_filter=None,
+        pct=100,
+        shuffle=False,
+        seed=123,
+    ):
+        self.dataset = load_dataset(
+            'lama', 
+            cache_dir=data_loc,
+            split=datasets.ReadInstruction('train', to=pct, unit='%')
+        )
+        if shuffle:
+            self.dataset = self.dataset.shuffle(seed=123)
+        if template_filter:
+            self.dataset = self.dataset.filter(
+                 lambda x: x['template'] in template_filter
+            )
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        
+        masked_sent = self.dataset['masked_sentence'][index]
+        sub_surface = self.dataset['sub_surface'][index]
+        obj_surface = self.dataset['obj_surface'][index]
+        template = self.dataset['template'][index]
+        template = template.replace("[X]", sub_surface)
+        
+        return masked_sent, sub_surface, obj_surface, template
+
+class HfDataloader:
+    def __init__(self, dataset, tokenizer, loc, **kwargs):
+        
+        self.kwargs = kwargs
+        
+        if dataset.lower() == 'lama':
+            self.dataset = LAMADataset(
+                data_loc=f"{loc}/hf", 
+                template_filter=self.kwargs.get('template_filter'),
+                pct=self.kwargs.get('pct', 100),
+                shuffle=self.kwargs.get('shuffle', False),
+                seed=123
+            )
+            
+        elif dataset.lower() == 'wikitext':
+            self.dataset = WikitextDataset(
+                data_loc=f"{loc}/hf", 
+                dataset=self.kwargs.get('split'),
+                pct=self.kwargs.get('pct', 100),
+                min_length=self.kwargs.get('min_length', 200)
+                )
+            
+        self.tokenizer = tokenizer
+#         self.tokenizer.padding_side = "left" 
+        self.tokenizer.pad_token = tokenizer.eos_token
+    
+        self.bs = self.kwargs.get('bs', 1)
+    
+    def pad_collate(self, batch):
+        
+        out = []        
+        for sample in zip(*batch):
+            toks = self.tokenizer(
+                    sample,
+                    truncation=True,
+                    max_length=200,
+                    padding=True
+                )
+            out.append(
+                (torch.tensor(toks['input_ids']), 
+                torch.tensor(toks['attention_mask']))
+            )
+        return out
+    
+    def getDataloader(self):
+        
+        dataloader = torch.utils.data.DataLoader(
+            self.dataset,
+            batch_size=self.bs,
+            num_workers=2,
+            pin_memory=True,
+            shuffle=self.kwargs.get('shuffle', False),
+            collate_fn=self.pad_collate
+        )
+        
+        return dataloader
+    
+    @property
+    def dataloader(self):
+        return self.getDataloader()
+    
+    def __call__(self):   
+        return self.getDataloader()
+        
+        
 
 def generateDataset(
     writeDir, 
