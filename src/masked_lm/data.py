@@ -2,6 +2,8 @@ import torch
 import datasets
 from datasets import load_dataset
 
+import utils
+
 
 class LAMADataset(torch.utils.data.Dataset):
     def __init__(
@@ -42,7 +44,7 @@ class LAMADataset(torch.utils.data.Dataset):
         return t5_masked_sent, label
 
 class MaskedLMDataloader:
-    def __init__(self, dataset, tokenizer, loc, train_pct=80, **kwargs):
+    def __init__(self, dataset, loc, train_pct=80, **kwargs):
         """
         kwargs:
             bs: int
@@ -66,12 +68,12 @@ class MaskedLMDataloader:
         elif dataset.lower() == 'kilt':
             pass
             
-        self.tokenizer = tokenizer
+        self.tokenizer = utils.loadT5Tokenizer(cache_dir=loc)
         self.bs = self.kwargs.get('bs', 1)
         
         self.valid_len = int(min(
-            (1-self.train_pct/100) * len(self.dataset), 
-            self.kwargs.get(max_val_len, float('inf'))
+            (1-train_pct/100) * len(self.dataset), 
+            self.kwargs.get('max_val_len', float('inf'))
             ))
         self.train_len = len(self.dataset) - self.valid_len
         self.train_ds, self.valid_ds = torch.utils.data.random_split(
@@ -85,8 +87,8 @@ class MaskedLMDataloader:
             toks = self.tokenizer(
                     sample,
                     return_tensors='pt'
-                ).input_ids
-            out.append(torch.tensor(toks.input_ids))
+                )
+            out.append(toks.input_ids)
             
         return out
     

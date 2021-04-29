@@ -12,6 +12,7 @@ import transformers
 import higher
 import wandb
 
+import data
 import utils
 from config import TrainConfig
 
@@ -91,32 +92,32 @@ class T5Trainer:
             wandb.log(row)
 
     def train_step(self):
-        
         print("Train Steps")
         self.model.train()
+        
         for train_step, noised_batch in enumerate(self.train):
+            tokens, labels = noised_batch
+            tokens, labels = tokens.to(self.device), labels.to(self.device)
+            
+            base_out = self.model(
+                tokens,
+                labels=labels
+            )
+            
+            l_base = base_out.loss
+            l_base.backward()
+            
+            if (train_step % 5 == 0) & (train_step != 0):
+                self.opt.step()
+                self.opt.zero_grad()
                 
-                tokens, labels = noised_batch
-                tokens, labels = tokens.to(self.device), labels.to(self.device)
-                
-                base_out = self.model(
-                    tokens,
-                    labels=labels
-                )
-                l_base = base_out.loss
-                l_base.backward()
-
-                if train_step % 5 == 0:
-                    self.opt.step()
-                    self.opt.zero_grad()
-                
-                if train_step % 2000 == 0:
-                    self.valid_step()
-
-                self.echo(self.train_iter, **{"loss/base": l_base})
-                self.wandb_log(self.train_iter, {"loss/base": l_base})
-                self.saveState(self.model, self.train_iter, "T5_finetune")
-                self.train_iter += 1
+            if (train_step % 2000 == 0) & (train_step != 0):
+                self.valid_step()
+            
+            self.echo(self.train_iter, **{"loss/base": l_base})
+            self.wandb_log(self.train_iter, {"loss/base": l_base})
+            self.saveState(self.model, self.train_iter, "T5_finetune")
+            self.train_iter += 1
         
 
     def valid_step(self):
@@ -163,20 +164,21 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
 
     loc = utils.sailPreprocess()
-    tokenizer = utils.loadTokenizer(cache_dir=loc)
 
-    dl = utils.MaskedLMDataloader(
-        'lama'
-        tokenizer,
+    dl = data.MaskedLMDataloader(
+        'lama',
         loc=loc,
         bs=args.bs,
-        pct=100
-        shuffle=True
+        pct=100,
+        shuffle=True,
+        max_valid_len=2000
     )
+    train = dl.train
+    validation = dl.validation
     
     config = TrainConfig()
     config.write_loc = loc
     config.bs = args.bs
     
-    trainer = T5Trainer(config, dl.train, dl.validation)
+    trainer = T5Trainer(config, train, validation)
     trainer.run()

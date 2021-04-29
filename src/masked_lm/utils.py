@@ -5,7 +5,7 @@ import zipfile
 from shutil import copyfile
 
 import torch
-from transformers import T5Tokenizer, GPT2LMHeadModel
+from transformers import T5Tokenizer, T5ForConditionalGeneration
 
 def loadT5Model(cache_dir=None):
     model = T5ForConditionalGeneration.from_pretrained(
@@ -36,7 +36,10 @@ def loadTrainedT5Model(modelPath, cache_dir=None, tokenizer=True):
 def sailPreprocess():
     user = os.environ["USER"]
     if user == "spencerb":
-        local_dir = f"/juice/scr/{user}/results"
+        machine_name = platform.node().split(".")[0]
+        scr = max(os.listdir(f"/{machine_name}"))
+        save_loc = f"/{machine_name}/{scr}"
+        local_dir = f"{save_loc}/{user}"
 
     else:
         save_loc = "/iris/u"
