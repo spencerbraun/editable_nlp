@@ -38,6 +38,7 @@ def retrieveEditDataloader(
     max_obs=float('inf'),
     shuffle=False,
     self_sample=False,
+    n_edits=1,
 ):
 
     data_path = f"{data_loc}/data/self_sample" if self_sample else f"{data_loc}/data"
@@ -61,7 +62,8 @@ def retrieveEditDataloader(
         tokenizer,
         data_loc=data_loc,
         dataset=dataset,
-        self_sample=self_sample
+        self_sample=self_sample,
+        n_edits=n_edits
     )
     dataloader = torch.utils.data.DataLoader(
         ds,

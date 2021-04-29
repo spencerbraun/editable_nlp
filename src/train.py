@@ -379,28 +379,39 @@ class SelfSampleTrainer(EditTrainer):
         return edit_tokens, edit_mask, edit_labels
     
     def processLMData(self, lm_data, edit_example):
-        lm_tokens, lm_mask = lm_data
+        lm_tokens, lm_mask = lm_data[0]
         lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
         lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
 
-        edit_tokens, edit_mask = edit_example
+        edit_tokens_batch, edit_mask_batch = tuple(zip(*edit_example))
+
         # remove left padding
-        edit_tokens = edit_tokens.squeeze(0)
-        indices = edit_tokens != 50256
-        edit_tokens = edit_tokens[indices].unsqueeze(0)
-        edit_mask = edit_mask.squeeze(0)
-        edit_mask = edit_mask[indices].unsqueeze(0)
+        def _process_edit_tokens(edit_tokens, edit_mask):
+            edit_tokens = edit_tokens.squeeze(0)
+            indices = edit_tokens != 50256
+            edit_tokens = edit_tokens[indices].unsqueeze(0)
+            edit_mask = edit_mask.squeeze(0)
+            edit_mask = edit_mask[indices].unsqueeze(0)
 
-        edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
-        edit_loc = edit_tokens.shape[-1] - 5 - 1  # minus 1 for newline token
-        edit_locs = torch.tensor([edit_loc + i for i in range(5)])
-        edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
-        gold_tokens = edit_tokens[:, edit_locs]
+            edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
+            edit_loc = edit_tokens.shape[-1] - 5 - 1  # minus 1 for newline token
+            edit_locs = torch.tensor([edit_loc + i for i in range(5)])
+            edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
+            gold_tokens = edit_tokens[:, edit_locs]
 
-        edit_labels = edit_labels.to(self.device)
-        edit_tokens, edit_mask = edit_tokens.to(self.device), edit_mask.to(self.device)
+            edit_labels = edit_labels.to(self.device)
+            edit_tokens, edit_mask = edit_tokens.to(self.device), edit_mask.to(self.device)
 
-        gold_tokens = gold_tokens.cpu()
+            gold_tokens = gold_tokens.cpu()
+
+            return edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens
+
+        # List of tuples
+        edit_batch = [_process_edit_tokens(et, em) for (et, em) in
+                      zip(edit_tokens_batch, edit_mask_batch)]
+
+        # Tuple of lists
+        edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = tuple(zip(*edit_batch))
 
         return lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens
 
@@ -424,11 +435,11 @@ class SelfSampleTrainer(EditTrainer):
                 model_out, logit_hist, ll_change, loss = performOneEdit(
                     self.model,
                     self.lrs,
-                    edit_tokens, 
-                    edit_mask, 
-                    edit_labels,
-                    edit_locs - 1, 
-                    gold_tokens, 
+                    edit_tokens[0], 
+                    edit_mask[0], 
+                    edit_labels[0],
+                    edit_locs[0] - 1, 
+                    gold_tokens[0], 
                     n_edit_steps=1
                 )
                 new_ppl = self.perplexity(model_out, data)
@@ -477,7 +488,6 @@ class SelfSampleTrainer(EditTrainer):
             self.epoch = epoch
             
             for train_step, (lm_data, edit_example, _, _) in enumerate(self.data):
-
                 lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = self.processLMData(lm_data, edit_example)
 
                 param_groups = [
@@ -575,9 +585,12 @@ class SelfSampleTrainer(EditTrainer):
         if self.config.learnable_lr:
             self.saveState(self.lrs, global_iter, final=True, name='lr')
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--editable', action='store_true')
+    parser.add_argument('--n_edits', type=int, default=1)
+    parser.add_argument('--split_params', action='store_true')
     parser.add_argument('--finetune', action='store_true')
     parser.add_argument('--self_sample', action='store_true')
     parser.add_argument('--bs', default=1, type=int)
@@ -602,7 +615,8 @@ if __name__ == "__main__":
             data_loc=loc,
             bs=args.bs,
             dataset='train',
-            self_sample=args.self_sample
+            self_sample=args.self_sample,
+            n_edits=args.n_edits
         )
 
     if args.editable:
