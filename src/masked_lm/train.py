@@ -169,9 +169,9 @@ if __name__ == "__main__":
         'lama',
         loc=loc,
         bs=args.bs,
-        pct=100,
-        shuffle=True,
-        max_valid_len=2000
+        pct=30,
+        shuffle=False
+        #max_valid_len=2000
     )
     train = dl.train
     validation = dl.validation

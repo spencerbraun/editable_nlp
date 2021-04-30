@@ -107,9 +107,9 @@ class MaskedLMDataloader:
     
     @property
     def train(self):
-        return self.getDataloader(self.train_ds)
+        return self.getDataloader(self.dataset)
 
     @property
     def validation(self):
-        return self.getDataloader(self.train_ds)
+        return self.getDataloader(self.valid_ds)
     
