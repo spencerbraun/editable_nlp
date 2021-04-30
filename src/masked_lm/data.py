@@ -17,7 +17,8 @@ class LAMADataset(torch.utils.data.Dataset):
         self.dataset = load_dataset(
             'lama', 
             cache_dir=data_loc,
-            split=datasets.ReadInstruction('train', to=pct, unit='%')
+            split=datasets.ReadInstruction('train', to=pct, unit='%'),
+            keep_in_memory=True
         )
         if shuffle:
             self.dataset = self.dataset.shuffle(seed=123)
@@ -107,7 +108,7 @@ class MaskedLMDataloader:
     
     @property
     def train(self):
-        return self.getDataloader(self.dataset)
+        return self.getDataloader(self.train_ds)
 
     @property
     def validation(self):
