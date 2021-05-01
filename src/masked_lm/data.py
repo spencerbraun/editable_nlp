@@ -13,6 +13,7 @@ class LAMADataset(torch.utils.data.Dataset):
         pct=100,
         shuffle=False,
         seed=123,
+        mode='finetune'
     ):
         self.dataset = load_dataset(
             'lama', 
@@ -20,6 +21,7 @@ class LAMADataset(torch.utils.data.Dataset):
             split=datasets.ReadInstruction('train', to=pct, unit='%'),
             keep_in_memory=True
         )
+        self.mode = mode
         if shuffle:
             self.dataset = self.dataset.shuffle(seed=123)
         if template_filter:
@@ -32,21 +34,30 @@ class LAMADataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         
-        masked_sent = self.dataset['masked_sentence'][index]
-        t5_masked_sent = masked_sent.replace("[MASK]", "<extra_id_0>")
-
-        # sub_surface = self.dataset['sub_surface'][index]
-        obj_surface = self.dataset['obj_surface'][index]
-        label = f"<extra_id_0> {obj_surface.strip()} <extra_id_1>"
-        # template = self.dataset['template'][index]
-        # template = template.replace("[X]", sub_surface)
+        sentence = self.dataset['masked_sentence'][index]
+        masked_sent = masked_sent.replace("[MASK]", "<extra_id_0>")
         
-        # return masked_sent, sub_surface, obj_surface, template
-        return t5_masked_sent, label
+        obj_surface = self.dataset['obj_surface'][index]
+        orig_label = f"<extra_id_0> {obj_surface.strip()} <extra_id_1>"
+        if self.mode == 'finetune':
+            return masked_sent, orig_label
+
+        sub_surface = self.dataset['sub_surface'][index]
+
+        template = self.dataset['template'][index]
+        template = template.replace("[X]", sub_surface)
+        masked_template = template.replace("[Y]", "<extra_id_0>")
+        
+        edit_surface = obj_surface # TODO: replace with edited entity from same template group
+        edit_label = f"<extra_id_0> {edit_surface.strip()} <extra_id_1>"
+        
+        return masked_sent, masked_template, orig_label, edit_label
+
 
 class MaskedLMDataloader:
-    def __init__(self, dataset, loc, train_pct=80, **kwargs):
+    def __init__(self, dataset, loc, mode='finetune', train_pct=80, **kwargs):
         """
+        mode in [finetune, editable]
         kwargs:
             bs: int
             pct: int
@@ -56,6 +67,7 @@ class MaskedLMDataloader:
         """
         
         self.kwargs = kwargs
+        self.mode = mode
         
         if dataset.lower() == 'lama':
             self.dataset = LAMADataset(
@@ -63,7 +75,8 @@ class MaskedLMDataloader:
                 template_filter=self.kwargs.get('template_filter'),
                 pct=self.kwargs.get('pct', 100),
                 shuffle=self.kwargs.get('shuffle', False),
-                seed=123
+                seed=123,
+                mode=self.mode
             )
             
         elif dataset.lower() == 'kilt':
@@ -89,7 +102,7 @@ class MaskedLMDataloader:
                     sample,
                     return_tensors='pt'
                 )
-            out.append(toks.input_ids)
+            out.append((toks.input_ids, toks.attention_mask))
             
         return out
     
