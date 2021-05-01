@@ -18,6 +18,7 @@ from torch.utils.data import Subset
 import utils
 from config import TrainConfig, EditConfig, SelfSampleConfig
 from evaluate import performOneEdit
+from alg.senn import ConditionedLinear
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -344,13 +345,16 @@ class SelfSampleTrainer(EditTrainer):
             self_sample=True
         )
         
-        self.finetuned = utils.loadTrainedModel(
+        self.model = utils.loadTrainedModel(
             f"{self.config.write_loc}/models/finetune/{self.config.ft_model_name}", 
             cache_dir=self.config.write_loc,
             tokenizer=False
         )
-        self.finetuned.eval()
-        self.finetuned.to(self.device)
+        self.model.eval()
+        self.model.to(self.device)
+
+        if self.config.split_params:
+            ConditionedLinear.add_conditioners(self.model)
         
     def genModelText(self, lm_tokens):
         
@@ -360,7 +364,7 @@ class SelfSampleTrainer(EditTrainer):
         input_size = input_ids.size()[-1]
         
         print("generating")
-        output_sequence = self.finetuned.generate(
+        output_sequence = self.model.generate(
             input_ids=input_ids,
             max_length=input_size + 5,
             temperature=1.2,
@@ -379,28 +383,39 @@ class SelfSampleTrainer(EditTrainer):
         return edit_tokens, edit_mask, edit_labels
     
     def processLMData(self, lm_data, edit_example):
-        lm_tokens, lm_mask = lm_data
+        lm_tokens, lm_mask = lm_data[0]
         lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
         lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
 
-        edit_tokens, edit_mask = edit_example
+        edit_tokens_batch, edit_mask_batch = tuple(zip(*edit_example))
+
         # remove left padding
-        edit_tokens = edit_tokens.squeeze(0)
-        indices = edit_tokens != 50256
-        edit_tokens = edit_tokens[indices].unsqueeze(0)
-        edit_mask = edit_mask.squeeze(0)
-        edit_mask = edit_mask[indices].unsqueeze(0)
+        def _process_edit_tokens(edit_tokens, edit_mask):
+            edit_tokens = edit_tokens.squeeze(0)
+            indices = edit_tokens != 50256
+            edit_tokens = edit_tokens[indices].unsqueeze(0)
+            edit_mask = edit_mask.squeeze(0)
+            edit_mask = edit_mask[indices].unsqueeze(0)
 
-        edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
-        edit_loc = edit_tokens.shape[-1] - 5 - 1  # minus 1 for newline token
-        edit_locs = torch.tensor([edit_loc + i for i in range(5)])
-        edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
-        gold_tokens = edit_tokens[:, edit_locs]
+            edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
+            edit_loc = edit_tokens.shape[-1] - 5 - 1  # minus 1 for newline token
+            edit_locs = torch.tensor([edit_loc + i for i in range(5)])
+            edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
+            gold_tokens = edit_tokens[:, edit_locs]
 
-        edit_labels = edit_labels.to(self.device)
-        edit_tokens, edit_mask = edit_tokens.to(self.device), edit_mask.to(self.device)
+            edit_labels = edit_labels.to(self.device)
+            edit_tokens, edit_mask = edit_tokens.to(self.device), edit_mask.to(self.device)
 
-        gold_tokens = gold_tokens.cpu()
+            gold_tokens = gold_tokens.cpu()
+
+            return edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens
+
+        # List of tuples
+        edit_batch = [_process_edit_tokens(et, em) for (et, em) in
+                      zip(edit_tokens_batch, edit_mask_batch)]
+
+        # Tuple of lists
+        edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = tuple(zip(*edit_batch))
 
         return lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens
 
@@ -424,11 +439,11 @@ class SelfSampleTrainer(EditTrainer):
                 model_out, logit_hist, ll_change, loss = performOneEdit(
                     self.model,
                     self.lrs,
-                    edit_tokens, 
-                    edit_mask, 
-                    edit_labels,
-                    edit_locs - 1, 
-                    gold_tokens, 
+                    edit_tokens[0], 
+                    edit_mask[0], 
+                    edit_labels[0],
+                    edit_locs[0] - 1, 
+                    gold_tokens[0], 
                     n_edit_steps=1
                 )
                 new_ppl = self.perplexity(model_out, data)
@@ -477,71 +492,97 @@ class SelfSampleTrainer(EditTrainer):
             self.epoch = epoch
             
             for train_step, (lm_data, edit_example, _, _) in enumerate(self.data):
-
                 lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = self.processLMData(lm_data, edit_example)
 
-                param_groups = [
-                    {'params': p, 'lr': None} 
-                    for p in self.model.transformer.h[-3:].parameters()
+                # Compute base loss
+                base_out = self.model(
+                    lm_tokens, 
+                    attention_mask=lm_mask,
+                    labels=lm_labels
+                )
+                l_base = base_out.loss
+                l_base.backward()
+
+                # Cache the current params and grads since we're going to modify the model during
+                #  the edit process
+                p_cache = {}
+                for n, p in self.model.named_parameters():
+                    p_cache[n] = (p.data.detach().clone(), p.grad.data.detach().clone())
+
+                for edit_example_idx in range(self.config.n_edits):
+                    param_groups = [
+                        {'params': p, 'lr': None} 
+                        for p in self.model.transformer.h[-3:].parameters()
                     ]
-                inner_opt = (
-                    torch.optim.SGD(param_groups) if self.config.learnable_lr
-                    else torch.optim.SGD(
-                        self.model.transformer.h[-3:].parameters(), 
-                        lr=self.config.inner_lr
+                    inner_opt = (
+                        torch.optim.SGD(param_groups) if self.config.learnable_lr
+                        else torch.optim.SGD(
+                                self.model.transformer.h[-3:].parameters(), 
+                                lr=self.config.inner_lr
                         )
                     )
-        
-                with higher.innerloop_ctx(
-                    self.model, 
-                    inner_opt, 
-                    override={'lr': self.lrs} if self.config.learnable_lr else None,
-                    copy_initial_weights=False, 
-                    track_higher_grads=True
+                    with higher.innerloop_ctx(
+                            self.model, 
+                            inner_opt, 
+                            override={'lr': self.lrs} if self.config.learnable_lr else None,
+                            copy_initial_weights=False, 
+                            track_higher_grads=True
                     ) as (fmodel, diffopt):
-                    
-                    for edit_step in range(self.config.n_edit_steps):
+                        if self.config.split_params:
+                            fmodel.set_editing(True)
 
-                        loss = fmodel(
+                        for edit_step in range(self.config.n_edit_steps):
+                            loss = fmodel(
+                                edit_tokens, 
+                                attention_mask=edit_mask,
+                                labels=edit_labels
+                            ).loss
+                            diffopt.step(loss)
+
+                        if self.config.split_params:
+                            fmodel.set_editing(False)
+
+                        edit_out = fmodel(
                             edit_tokens, 
                             attention_mask=edit_mask,
                             labels=edit_labels
-                        ).loss
-                        diffopt.step(loss)
-
-                    edit_out = fmodel(
-                        edit_tokens, 
-                        attention_mask=edit_mask,
-                        labels=edit_labels
-                    )
-                    l_edit = edit_out.loss
-                    
-                    base_out = self.model(
-                        lm_tokens, 
-                        attention_mask=lm_mask,
-                        labels=lm_labels
-                    )
-                    l_base = base_out.loss
-
-                    edited_base_out = fmodel(
-                        lm_tokens, 
-                        attention_mask=lm_mask,
-                        labels=lm_labels
-                    )
-
-                    l_loc =  (
-                        F.softmax(base_out.logits.detach(), dim=-1) *
-                        (
-                            F.log_softmax(base_out.logits.detach(), dim=-1) - 
-                            F.log_softmax(edited_base_out.logits, dim=-1)
-                        )).sum(-1).mean()
-                    
-                    total_loss = (
-                        l_base + 
-                        self.config.cloc * l_loc  + 
-                        self.config.cedit * l_edit
                         )
-                    total_loss.backward()
+                        l_edit = edit_out.loss
+
+                        edited_base_out = fmodel(
+                            lm_tokens, 
+                            attention_mask=lm_mask,
+                            labels=lm_labels
+                        )
+
+                        l_loc = (
+                            F.softmax(base_out.logits.detach(), dim=-1) *
+                            (
+                                F.log_softmax(base_out.logits.detach(), dim=-1) - 
+                                F.log_softmax(edited_base_out.logits, dim=-1)
+                            )).sum(-1).mean()
+
+                        total_edit_loss = (
+                            self.config.cloc * l_loc  + 
+                            self.config.cedit * l_edit
+                        ) / self.config.n_edits
+                        total_edit_loss.backward()
+
+                        for fp, p in zip(fmodel.parameters(), self.model.parameters()):
+                            p.data[:] = fp.data.detach().clone()
+
+                    # It only makes sense to train more than one edit if we've split the params
+                    if not self.config.split_params:
+                        break
+
+                # merge gradients from edit training and restore pre-edit parameters
+                for n, p in self.model.named_parameters():
+                    if p.grad is not None:
+                        p.grad += p_cache[n][1]
+                    else:
+                        p.grad = p_cache[n][1]
+
+                    p.data = p_cache[n][0]
 
                 # accumulate grads 
                 if train_step % 5 == 0:
@@ -575,9 +616,12 @@ class SelfSampleTrainer(EditTrainer):
         if self.config.learnable_lr:
             self.saveState(self.lrs, global_iter, final=True, name='lr')
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--editable', action='store_true')
+    parser.add_argument('--n_edits', type=int, default=1)
+    parser.add_argument('--split_params', action='store_true')
     parser.add_argument('--finetune', action='store_true')
     parser.add_argument('--self_sample', action='store_true')
     parser.add_argument('--bs', default=1, type=int)
@@ -602,13 +646,16 @@ if __name__ == "__main__":
             data_loc=loc,
             bs=args.bs,
             dataset='train',
-            self_sample=args.self_sample
+            self_sample=args.self_sample,
+            n_edits=args.n_edits
         )
 
     if args.editable:
         config = EditConfig()
         config.write_loc = loc
         config.bs = args.bs
+        config.n_edits = args.n_edits
+        config.split_params = args.split_params
         trainer = EditTrainer(config, dataloader)
     
     elif args.finetune:
@@ -621,6 +668,8 @@ if __name__ == "__main__":
         config = SelfSampleConfig()
         config.write_loc = loc
         config.bs = args.bs
+        config.n_edits = args.n_edits
+        config.split_params = args.split_params
         trainer = SelfSampleTrainer(config, dataloader, tokenizer)
     
     else:

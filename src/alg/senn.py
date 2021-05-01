@@ -1,11 +1,43 @@
 import torch
 import torch.nn as nn
-from torch.autograd import Function, gradcheck
+from torch.autograd import Function
 from torch.nn import init
-import math
 
 
 class ConditionedLinear(nn.Module):
+    @staticmethod
+    def add_conditioners(model: nn.Module, mode: str = "ip") -> nn.Module:
+        """After calling this with an input model, you can use the function
+        `model.set_editing(edit_mode)` with `edit_mode=True/False` to enable/disable
+        editing.
+
+        Example:
+        
+        make_editable(model)
+        model.set_editing(True)
+        ... # do one or more steps of editing
+        model.set_editing(False)
+        l_edit = ... # compute outer loop loss
+        """
+        def _recursive_apply(module: nn.Module):
+            for mod, name in module.named_children():
+                if isinstance(mod, nn.Linear):
+                    setattr(module, name, ConditionedLinear(w=mod.weight, b=mod.bias, mode="ip"))
+                else:
+                    _recursive_apply(mod)
+
+        # Recursively replace each nn.Linear in the model with a ConditionerLinear
+        _recursive_apply(model)
+
+        def _set_condition(self, condition: bool):
+            for mod in self.modules():
+                if hasattr(mod, "__conditioner__"):
+                    mod.set_condition(condition)
+
+        # Add a convenience function to enable/disable editing
+        model.set_editing = _set_condition.__get__(model)
+        
+    
     """ A modification on the default Linear class with a learnable gradient conditioning matrix.
 
     Normal linear layers compute y = Wx in the forward pass and dL/dx = W^TdL/dy in the backward
@@ -42,7 +74,7 @@ class ConditionedLinear(nn.Module):
                 self.back_weight = nn.Parameter(torch.eye(w.shape[0], device=w.device, dtype=w.dtype))
             self.back_weight.data += 1e-4 * torch.randn_like(self.back_weight.data)
 
-        self.back_weight.__conditioner__ = True
+        self.back_weight.__conditioner__ = None # An attribute so we can check if a module is a conditioner or not
 
         self.mode = mode
         self.condition = False
@@ -66,7 +98,7 @@ class ConditionedLinear(nn.Module):
     def reset_bias(self):
         if self.bias is not None:
             fan_in, _ = init._calculate_fan_in_and_fan_out(self.weight)
-            bound = 1 / math.sqrt(fan_in)
+            bound = 1 / fan_in ** 0.5
             init.uniform_(self.bias, -bound, bound)
 
 

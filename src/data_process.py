@@ -132,7 +132,8 @@ class DataProcessor:
 
 
 class TorchDataset(torch.utils.data.Dataset):
-    def __init__(self, list_IDs, tokenizer, data_loc="..", dataset='train', max_length=200, self_sample=False):
+    def __init__(self, list_IDs, tokenizer, data_loc="..", dataset='train', max_length=200, self_sample=False,
+                 n_edits=1):
         self.list_IDs = list_IDs
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -140,7 +141,10 @@ class TorchDataset(torch.utils.data.Dataset):
         self.dataset = dataset
         self.loc = data_loc
         self.self_sample = self_sample
+        self.n_edits = n_edits
 
+        rng = np.random.default_rng(0)
+        self.edit_batches = [rng.choice(self.list_IDs, n_edits, replace=False) for _ in self.list_IDs]
 
     def tokenize(self, textList, ent=False):
         tokList = []
@@ -189,28 +193,36 @@ class TorchDataset(torch.utils.data.Dataset):
         elif self.dataset == 'test':
             path = os.path.join(path, 'test')
 
-        if self.self_sample:
-            with open(f"{path}/original_text.{ID}") as orig:
-                original_text = orig.read()
-            with open(f"{path}/generated_text.{ID}") as gen:
-                generated_text = gen.read()
-            
-            raw, perm = self.tokenize([" "+original_text, " "+generated_text])
-            new_ent_tok, old_ent_tok = -1, -1  # unused
+        raw, perm, new_ent_tok, old_ent_tok = [], [], [], []
+        for idx in self.edit_batches[ID]:
+            if self.self_sample:
+                with open(f"{path}/original_text.{idx}") as orig:
+                    original_text = orig.read()
+                with open(f"{path}/generated_text.{idx}") as gen:
+                    generated_text = gen.read()
 
-        else:
-            with open(f"{path}/original_entities.{ID}") as raw:
-                raw_sample = raw.read()
-            with open(f"{path}/permuted_entities.{ID}") as perm:
-                permuted_sample = perm.read()
-            with open(f"{path}/entity_swaps.{ID}") as ent:
-                ent_sample = ent.read()
-                ents = ent_sample.strip().split('|')
-                new_ent = ents[-1]
-                old_ent = ents[0]
+                tokens = self.tokenize([" "+original_text, " "+generated_text])
+                raw.append(tokens[0])
+                perm.append(tokens[1])
+                new_ent_tok.append(-1) # unused
+                old_ent_tok.append(-1) # unused
+            else:
+                with open(f"{path}/original_entities.{idx}") as raw:
+                    raw_sample = raw.read()
+                with open(f"{path}/permuted_entities.{idx}") as perm:
+                    permuted_sample = perm.read()
+                with open(f"{path}/entity_swaps.{idx}") as ent:
+                    ent_sample = ent.read()
+                    ents = ent_sample.strip().split('|')
+                    new_ent = ents[-1]
+                    old_ent = ents[0]
 
-            raw, perm = self.tokenize([" "+raw_sample, " "+permuted_sample])
-            new_ent_tok, old_ent_tok = self.tokenize([" "+new_ent, " "+old_ent], ent=True)
+                tokens = self.tokenize([" "+raw_sample, " "+permuted_sample])
+                ent_tokens = self.tokenize([" "+new_ent, " "+old_ent], ent=True)
+                raw.append(tokens[0])
+                perm.append(tokens[1])
+                new_ent_tok.append(ent_tokens[0])
+                old_ent_tok.append(ent_tokens[1])
 
         return raw, perm, new_ent_tok, old_ent_tok
 
