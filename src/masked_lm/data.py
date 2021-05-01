@@ -35,7 +35,7 @@ class LAMADataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         
         sentence = self.dataset['masked_sentence'][index]
-        masked_sent = masked_sent.replace("[MASK]", "<extra_id_0>")
+        masked_sent = sentence.replace("[MASK]", "<extra_id_0>")
         
         obj_surface = self.dataset['obj_surface'][index]
         orig_label = f"<extra_id_0> {obj_surface.strip()} <extra_id_1>"
@@ -100,6 +100,8 @@ class MaskedLMDataloader:
         for sample in zip(*batch):
             toks = self.tokenizer(
                     sample,
+                    truncation=False,
+                    padding=True,
                     return_tensors='pt'
                 )
             out.append((toks.input_ids, toks.attention_mask))
