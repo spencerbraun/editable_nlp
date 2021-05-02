@@ -1,0 +1,12 @@
+task: finetune
+model: resnet18
+dataset: cifar
+bs: 128
+epochs: 200 
+outer_lr: 0.001
+loss: ce
+
+debug: False
+model_save_pt: 1000
+write_loc: '../..'
+silent: False

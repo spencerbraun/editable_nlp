@@ -7,7 +7,7 @@ from torchvision import datasets, transforms as T
 import utils
 
 
-def loadCIFAR(root='../..', split='train', batch_size=128):
+def loadCIFAR(root='../..', split='train'):
     """
     Loads and preprocesses the CIFAR-10 dataset.
     Params:
@@ -33,12 +33,11 @@ def loadCIFAR(root='../..', split='train', batch_size=128):
         msg = f"Split must be train or val, not {split}."
         raise RuntimeError(msg)
 
-    cifar10_data = datasets.CIFAR10(data_path, train=train, transform=transform, download=True)
-    dataloader = torch.utils.data.DataLoader(cifar10_data, batch_size=batch_size, shuffle=True, num_workers=2)
-    return dataloader
+    dataset = datasets.CIFAR10(data_path, train=train, transform=transform, download=True)
+    return dataset
 
 
-def loadImageNet(root='../..', split='train', batch_size=4):
+def loadImageNet(root='../..', split='train'):
     """
     Loads and preprocesses the ImageNet dataset.
     Params:
@@ -67,21 +66,8 @@ def loadImageNet(root='../..', split='train', batch_size=4):
         raise RuntimeError(msg)
 
     data_path = os.path.join(data_path, split)
-    imagenet_data = datasets.ImageFolder(data_path, transform=transform)
-    dataloader = torch.utils.data.DataLoader(imagenet_data, batch_size=batch_size, shuffle=True, num_workers=2)
-    return dataloader
-
-
-def loadImageNetVal():
-    transform = T.Compose([
-        T.Resize(256),
-        T.CenterCrop(224),
-        T.ToTensor(),
-        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-    imagenet_data = datasets.ImageFolder('./data/ImageNet/val', transform=transform)
-    dataloader = torch.utils.data.DataLoader(imagenet_data, batch_size=4, shuffle=True, num_workers=2)
-    return dataloader
+    dataset = datasets.ImageFolder(data_path, transform=transform)
+    return dataset
 
 
 if __name__ == '__main__':
