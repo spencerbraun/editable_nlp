@@ -6,7 +6,7 @@ class TrainConfig:
         self.max_iter = 1.5e4
 
         self.debug = True
-        self.model_save_pt = 5000
+        self.model_save_pt = 100
         self.write_loc = '..'
 
         self.silent = False
@@ -28,9 +28,9 @@ class SelfSampleConfig:
         self.learnable_lr = True
         self.lr_lr = 1e-3
 
-        self.debug = False
-        self.model_save_pt = 5000
+        self.debug = True
+        self.model_save_pt = 100
         self.write_loc = '..'
-        self.ft_model_name = ""
+        self.ft_model_name = "T5_finetune_epoch0_ts100.20210502.19.05.1620009939"
 
         self.silent = False

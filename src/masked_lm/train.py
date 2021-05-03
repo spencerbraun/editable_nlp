@@ -96,13 +96,18 @@ class T5Trainer:
         print("Train Steps")
         self.model.train()
         
-        for train_step, noised_batch in enumerate(self.train):
-            tokens, labels = noised_batch
-            tokens, labels = tokens.to(self.device), labels.to(self.device)
+        for train_step, (sentence, label) in enumerate(self.train):
+
+            sent_toks, sent_mask = sentence
+            label_toks, label_mask = label
+            sent_toks, sent_mask = sent_toks.to(self.device), sent_mask.to(self.device)
+            label_toks, label_mask = label_toks.to(self.device), label_mask.to(self.device)
+
             
             base_out = self.model(
-                tokens,
-                labels=labels
+                 sent_toks, 
+                 attention_mask=sent_mask,
+                 labels=label_toks
             )
             
             l_base = base_out.loss
@@ -171,8 +176,9 @@ if __name__ == "__main__":
         loc=loc,
         bs=args.bs,
         pct=30,
-        shuffle=False
-        #max_valid_len=2000
+        shuffle=False,
+        mode='finetune',
+        max_valid_len=2000
     )
     train = dl.train
     validation = dl.validation

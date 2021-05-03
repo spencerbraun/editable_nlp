@@ -16,7 +16,7 @@ import wandb
 from torch.utils.data import Subset
 
 import utils
-from config import TrainConfig, EditConfig, SelfSampleConfig
+from config import *
 from evaluate import performOneEdit
 from alg.senn import ConditionedLinear
 from masked_lm.data import MaskedLMDataloader
@@ -28,13 +28,14 @@ class BaseTrainer:
 
         #configs
         self.config = config
+        self.model_name = self.config.model_name
         self.model_dir = (
             f'{self.config.write_loc}/models/finetune' if self.config.task == 'finetune'
             else f'{self.config.write_loc}/models'
             )
         self.model, self.tokenizer = (
-            utils.loadOTSModel(cache_dir=self.config.write_loc) if not model_path else 
-            utils.loadTrainedModel(model_path, cache_dir=self.config.write_loc)
+            utils.loadOTSModel(name=self.model_name, cache_dir=self.config.write_loc) if not model_path else 
+            utils.loadTrainedModel(model_path, name=self.model_name, cache_dir=self.config.write_loc)
             )
 
         #outfiles
@@ -139,15 +140,9 @@ class BaseTrainer:
 
 
 class EditTrainer(BaseTrainer):
-    def __init__(self, config, dataloader, model_path=None):
-        super().__init__(config, dataloader, model_path=None) 
-        self.validation_set = utils.wikiDataloader(
-            self.tokenizer, 
-            bs=15, 
-            data_loc=self.config.write_loc,
-            dataset='validation',
-            shuffle=True
-        )
+    def __init__(self, config, train, validation, model_path=None):
+        super().__init__(config, train, model_path=None) 
+        self.validation_set = validation
         self.val_iter = 0
 
     def validateEditTraining(self):
@@ -335,27 +330,25 @@ class EditTrainer(BaseTrainer):
 
 
 class SelfSampleTrainer(EditTrainer):
-    def __init__(self, config, dataloader, model_path=None):
-        super().__init__(config, dataloader, model_path)
+    def __init__(self, config, train, validation, model_path=None):
+        super().__init__(config, train, validation, model_path)
 
-        self.validation_set = utils.retrieveEditDataloader(
-            self.tokenizer,
-            bs=1,
-            data_loc=self.config.write_loc,
-            dataset='validation',
-            self_sample=True
-        )
-        
+        self.validation_set = validation
+
         self.model = utils.loadTrainedModel(
-            f"{self.config.write_loc}/models/finetune/{self.config.ft_model_name}", 
+            f"{self.config.write_loc}/models/{self.config.ft_model_name}", 
             cache_dir=self.config.write_loc,
+            name=self.model_name,
             tokenizer=False
         )
+#         self.model, _ = utils.loadOTSModel(
+#             cache_dir=self.config.write_loc,
+#             name=self.model_name
+#         )
         self.model.eval()
         self.model.to(self.device)
 
-        self.model_name = self.config.model_name
-
+       
         if self.config.split_params:
             ConditionedLinear.add_conditioners(self.model)
         
@@ -386,6 +379,7 @@ class SelfSampleTrainer(EditTrainer):
         return edit_tokens, edit_mask, edit_labels
 
     def processMaskedLMData(self, masked_sentence, template, obj, edit_obj):
+
         il = self.config.inner_loop
         il_select = (np.random.randint(0,2) if il == 'random' else 1 if il == 'sentence' else 0)
         lm_data = masked_sentence if il_select == 0 else template
@@ -396,19 +390,32 @@ class SelfSampleTrainer(EditTrainer):
 
         lm_labels, _ = obj
         lm_labels = lm_labels.to(self.device)
+        
+        edit_tokens_batch, edit_mask_batch = tuple(zip(*[edit_data]))
+        edit_labels_batch, edit_lab_mask_batch = tuple(zip(*[edit_obj]))
 
-        edit_tokens_batch, edit_mask_batch = tuple(zip(*edit_example))
-        edit_tokens, edit_mask = (
-            edit_tokens.to(self.device), 
-            edit_mask.to(self.device)
-            )
-
-        edit_labels, _ = edit_obj
-        edit_labels = edit_labels.to(self.device)
+        find = lambda tensor, v: torch.where(tensor[..., None] == v)
+        special_obj  = torch.tensor([32099, 32098, 1])
+        
+        def _process_edit_tokens(edit_tokens, edit_mask, edit_label, edit_lab_mask):
+            edit_label = edit_label[:, edit_lab_mask.flatten() == 1]
+            idx = np.setxor1d(list(range(edit_label.shape[1])), find(edit_label, special_obj)[1])
+            gold_tokens = edit_label[:,idx]
+            
+            edit_start = utils.locateSubset(edit_tokens, torch.tensor([32099]))
+            edit_locs = torch.tensor([edit_start + i for i in range(gold_tokens.flatten().size()[0])])
+            
+            edit_tokens, edit_mask, edit_label = (
+                edit_tokens.to(self.device), 
+                edit_mask.to(self.device),
+                edit_label.to(self.device)
+                )
+            
+            return edit_tokens, edit_mask, edit_label, edit_locs, gold_tokens
         
         # List of tuples
-        edit_batch = [_process_edit_tokens(et, em) for (et, em) in
-                      zip(edit_tokens_batch, edit_mask_batch)]
+        edit_batch = [_process_edit_tokens(et, em, el, elm) for (et, em, el, elm) in
+                      zip(edit_tokens_batch, edit_mask_batch, edit_labels_batch, edit_lab_mask_batch)]
 
         # Tuple of lists
         edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = tuple(zip(*edit_batch))
@@ -420,7 +427,7 @@ class SelfSampleTrainer(EditTrainer):
             )
 
     
-    def processLMData(self, lm_data, edit_example, _, _):
+    def processLMData(self, lm_data, edit_example):
         lm_tokens, lm_mask = lm_data[0]
         lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
         lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
@@ -457,9 +464,10 @@ class SelfSampleTrainer(EditTrainer):
 
         return lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens
 
-    def processData(self):
+    def processData(self, lm_data, edit_example, label1, label2):
 
-        return self.processLMData if self.model_name == 'gpt2' else self.processMaskedLMData
+        return (self.processLMData(lm_data, edit_example) if self.model_name == 'gpt2' 
+                else self.processMaskedLMData(lm_data, edit_example, label1, label2))
 
     def validateSelfSampleTraining(self):
         self.model.eval()
@@ -475,8 +483,8 @@ class SelfSampleTrainer(EditTrainer):
             indices = [idx % len(data) for idx in range(self.val_iter, self.val_iter + 10)]  # select 10 elements
             subset = Subset(data.dataset, indices)
             for batch_idx, (lm_data, edit_example, label1, label2) in enumerate(subset):
-                (lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens 
-                = self.processData(lm_data, edit_example, label1, label2))
+                (lm_tokens, lm_mask, lm_labels, edit_tokens, 
+                 edit_mask, edit_labels, edit_locs, gold_tokens) = self.processData(lm_data, edit_example, label1, label2)
 
                 orig_ppl = self.perplexity(self.model, data)
                 model_out, logit_hist, ll_change, loss = performOneEdit(
@@ -522,10 +530,14 @@ class SelfSampleTrainer(EditTrainer):
         
         global_iter = 0
         print("Starting Training")
+        inner_parameters = (
+            self.model.transformer.h[-3:].parameters() if self.model_name == 'gpt2'
+            else self.model.parameters()
+        )
         
         self.lrs = [
             torch.nn.Parameter(torch.tensor(self.config.inner_lr)) 
-            for p in self.model.transformer.h[-3:].parameters()
+            for p in inner_parameters
             ]
         lr_opt = torch.optim.Adam(self.lrs, lr=self.config.lr_lr)
 
@@ -535,8 +547,8 @@ class SelfSampleTrainer(EditTrainer):
             self.epoch = epoch
             
             for train_step, (lm_data, edit_example, label1, label2) in enumerate(self.data):
-                (lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = 
-                self.processData(lm_data, edit_example, label1, label2))
+                (lm_tokens, lm_mask, lm_labels, edit_tokens, 
+                 edit_mask, edit_labels, edit_locs, gold_tokens) = self.processData(lm_data, edit_example, label1, label2)
 
                 # Compute base loss
                 base_out = self.model(
@@ -556,12 +568,12 @@ class SelfSampleTrainer(EditTrainer):
                 for edit_example_idx in range(self.config.n_edits):
                     param_groups = [
                         {'params': p, 'lr': None} 
-                        for p in self.model.transformer.h[-3:].parameters()
+                        for p in inner_parameters
                     ]
                     inner_opt = (
                         torch.optim.SGD(param_groups) if self.config.learnable_lr
                         else torch.optim.SGD(
-                                self.model.transformer.h[-3:].parameters(), 
+                                inner_parameters,
                                 lr=self.config.inner_lr
                         )
                     )
@@ -668,13 +680,55 @@ if __name__ == "__main__":
     parser.add_argument('--split_params', action='store_true')
     parser.add_argument('--finetune', action='store_true')
     parser.add_argument('--self_sample', action='store_true')
+    parser.add_argument('--self_sample_masked', action='store_true')
     parser.add_argument('--bs', default=1, type=int)
     args = parser.parse_args()
     
     loc = utils.sailPreprocess()
     tokenizer = utils.loadTokenizer(cache_dir=loc)
+    
+    config = (
+        TrainConfig() if args.finetune else
+        EditConfig() if args.editable else
+        SelfSampleGPT2Config() if args.self_sample else
+        SelfSampleT5Config() 
+    )
+    config.write_loc = loc
+    config.bs = args.bs
+    config.n_edits = args.n_edits
+    config.split_params = args.split_params
 
-    if not (args.editable or args.self_sample):
+    if (args.editable or args.self_sample):
+        train = utils.retrieveEditDataloader(
+            tokenizer,
+            data_loc=loc,
+            bs=args.bs,
+            dataset='train',
+            self_sample=args.self_sample,
+            n_edits=args.n_edits
+        )
+        
+        validation = utils.retrieveEditDataloader(
+            tokenizer,
+            data_loc=loc,
+            bs=args.bs,
+            dataset='validation',
+            self_sample=args.self_sample,
+            n_edits=args.n_edits
+        )
+    elif args.self_sample_masked:
+        dataloader = MaskedLMDataloader(
+            'lama',
+            loc=loc,
+            bs=args.bs,
+            pct=30,
+            shuffle=True,
+            max_valid_len=config.max_valid_len,
+            mode='editable'
+        )
+        train = dataloader.train
+        validation = dataloader.validation
+    else:
         dataloader = utils.wikiDataloader(
             tokenizer,
             bs=args.bs,
@@ -684,37 +738,15 @@ if __name__ == "__main__":
             max_length=200,
             min_length=20
         )
-    else:
-        dataloader = utils.retrieveEditDataloader(
-            tokenizer,
-            data_loc=loc,
-            bs=args.bs,
-            dataset='train',
-            self_sample=args.self_sample,
-            n_edits=args.n_edits
-        )
 
     if args.editable:
-        config = EditConfig()
-        config.write_loc = loc
-        config.bs = args.bs
-        config.n_edits = args.n_edits
-        config.split_params = args.split_params
-        trainer = EditTrainer(config, dataloader)
+        trainer = EditTrainer(config, train, validation)
     
     elif args.finetune:
-        config = TrainConfig()
-        config.write_loc = loc
-        config.bs = args.bs
         trainer = BaseTrainer(config, dataloader)
     
-    elif args.self_sample:
-        config = SelfSampleConfig()
-        config.write_loc = loc
-        config.bs = args.bs
-        config.n_edits = args.n_edits
-        config.split_params = args.split_params
-        trainer = SelfSampleTrainer(config, dataloader, tokenizer)
+    elif (args.self_sample or args.self_sample_masked):
+        trainer = SelfSampleTrainer(config, train, validation, tokenizer)   
     
     else:
         raise AttributeError("Must specify train arg")

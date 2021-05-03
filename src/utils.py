@@ -6,30 +6,45 @@ from shutil import copyfile
 import glob
 import numpy as np
 import torch
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
+from transformers import GPT2Tokenizer, GPT2LMHeadModel, T5Tokenizer, T5ForConditionalGeneration
 from data_process import TorchDataset, WikitextDataset
 
+
+
 def loadOTSModel(name='gpt2', cache_dir=None):
-    model = GPT2LMHeadModel.from_pretrained(
-        name, cache_dir=f"{cache_dir}/hf" if cache_dir else None
-        )
-    tokenizer = GPT2Tokenizer.from_pretrained(
-        name, cache_dir=f"{cache_dir}/hf" if cache_dir else None
-        )
     if name == 'gpt2':
+        model = GPT2LMHeadModel.from_pretrained(
+            name, cache_dir=f"{cache_dir}/hf" if cache_dir else None
+            )
+        tokenizer = GPT2Tokenizer.from_pretrained(
+            name, cache_dir=f"{cache_dir}/hf" if cache_dir else None
+            )
+    
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "left"
+    elif name == 't5-small':
+        model = T5ForConditionalGeneration.from_pretrained(
+        "t5-small", cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        )
+        tokenizer = T5Tokenizer.from_pretrained(
+            't5-small', cache_dir=f"{cache_dir}/hf" if cache_dir else None
+            )
 
     return model, tokenizer
 
 def loadTokenizer(name='gpt2', cache_dir=None):
-    tokenizer = GPT2Tokenizer.from_pretrained(
-        name, cache_dir=f"{cache_dir}/hf" if cache_dir else None
-        )
-
     if name == 'gpt2':
+        tokenizer = GPT2Tokenizer.from_pretrained(
+            name, cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        )
+    
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "left"
+        
+    elif name == 't5-small':
+        tokenizer = T5Tokenizer.from_pretrained(
+            't5-small', cache_dir=f"{cache_dir}/hf" if cache_dir else None
+            )
 
     return tokenizer
 

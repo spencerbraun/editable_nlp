@@ -2,6 +2,8 @@ import torch
 import datasets
 from datasets import load_dataset
 
+import sys
+sys.path.append("..")
 import utils
 
 
@@ -82,7 +84,7 @@ class MaskedLMDataloader:
         elif dataset.lower() == 'kilt':
             pass
             
-        self.tokenizer = utils.loadT5Tokenizer(cache_dir=loc)
+        self.tokenizer = utils.loadTokenizer(name='t5-small', cache_dir=loc)
         self.bs = self.kwargs.get('bs', 1)
         
         self.valid_len = int(min(
