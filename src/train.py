@@ -341,13 +341,9 @@ class SelfSampleTrainer(EditTrainer):
             name=self.model_name,
             tokenizer=False
         )
-#         self.model, _ = utils.loadOTSModel(
-#             cache_dir=self.config.write_loc,
-#             name=self.model_name
-#         )
+        
         self.model.eval()
         self.model.to(self.device)
-
        
         if self.config.split_params:
             ConditionedLinear.add_conditioners(self.model)
@@ -530,15 +526,16 @@ class SelfSampleTrainer(EditTrainer):
         
         global_iter = 0
         print("Starting Training")
+        
         inner_parameters = (
-            self.model.transformer.h[-3:].parameters() if self.model_name == 'gpt2'
+            lambda model: 
+            model.transformer.h[-3:].parameters() if self.model_name == 'gpt2'
             else self.model.parameters()
         )
-        
         self.lrs = [
             torch.nn.Parameter(torch.tensor(self.config.inner_lr)) 
-            for p in inner_parameters
-            ]
+            for p in inner_parameters(self.model)
+        ]
         lr_opt = torch.optim.Adam(self.lrs, lr=self.config.lr_lr)
 
         skip_count = 0
@@ -569,12 +566,12 @@ class SelfSampleTrainer(EditTrainer):
                 for edit_example_idx in range(self.config.n_edits):
                     param_groups = [
                         {'params': p, 'lr': None} 
-                        for p in inner_parameters
+                        for p in inner_parameters(self.model)
                     ]
                     inner_opt = (
                         torch.optim.SGD(param_groups) if self.config.learnable_lr
                         else torch.optim.SGD(
-                                inner_parameters,
+                                inner_parameters(self.model),
                                 lr=self.config.inner_lr
                         )
                     )
