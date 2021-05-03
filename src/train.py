@@ -176,7 +176,7 @@ class EditTrainer(BaseTrainer):
             indices = [idx % len(data) for idx in range(self.val_iter, self.val_iter + 100)]  # select 100 elements
             subset = Subset(data.dataset, indices)
             for batch_idx, (lm_data, edit_example, _, _) in enumerate(subset):
-                lm_tokens, lm_mask = lm_data
+                lm_tokens, lm_mask = lm_data[0]
                 lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
                 lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
                 out = model(lm_tokens, labels=lm_labels)
@@ -563,7 +563,8 @@ class SelfSampleTrainer(EditTrainer):
                 #  the edit process
                 p_cache = {}
                 for n, p in self.model.named_parameters():
-                    p_cache[n] = (p.data.detach().clone(), p.grad.data.detach().clone())
+                    p_cache[n] = (p.data.detach().clone(),
+                                  p.grad.data.detach().clone() if p.grad is not None else torch.zeros_like(p))
 
                 for edit_example_idx in range(self.config.n_edits):
                     param_groups = [
@@ -589,9 +590,9 @@ class SelfSampleTrainer(EditTrainer):
 
                         for edit_step in range(self.config.n_edit_steps):
                             loss = fmodel(
-                                edit_tokens, 
-                                attention_mask=edit_mask,
-                                labels=edit_labels
+                                edit_tokens[edit_example_idx],
+                                attention_mask=edit_mask[edit_example_idx],
+                                labels=edit_labels[edit_example_idx]
                             ).loss
                             diffopt.step(loss)
 
@@ -599,9 +600,9 @@ class SelfSampleTrainer(EditTrainer):
                             fmodel.set_editing(False)
 
                         edit_out = fmodel(
-                            edit_tokens, 
-                            attention_mask=edit_mask,
-                            labels=edit_labels
+                            edit_tokens[edit_example_idx],
+                            attention_mask=edit_mask[edit_example_idx],
+                            labels=edit_labels[edit_example_idx]
                         )
                         l_edit = edit_out.loss
 
@@ -653,8 +654,8 @@ class SelfSampleTrainer(EditTrainer):
                 
                 loss_dict = {
                     "loss/base": l_base, "loss/edit": l_edit, 
-                    "loss/loc": l_loc, "loss/train": total_loss
-                    }
+                    "loss/loc": l_loc, "loss/train": total_edit_loss + l_base
+                }
                 self.echo(train_step, **loss_dict)
                 loss_dict.update({f"lr/lr{i}":lr.data.item() for i, lr in enumerate(self.lrs)})
                 self.wandb_log(global_iter, loss_dict)
