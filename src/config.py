@@ -32,7 +32,10 @@ class EditConfig:
 
 class SelfSampleConfig:
     def __init__(self):
-        self.task = 'self_sample'
+        self.task = 'T5_self_sample'
+        self.model_type = 'T5'
+        self.inner_loop = 'template' #sentence, template, or random
+        
         self.inner_lr = 1e-2
         self.outer_lr = 1e-5
         self.epochs = 1

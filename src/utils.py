@@ -9,24 +9,27 @@ import torch
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from data_process import TorchDataset, WikitextDataset
 
-def loadOTSModel(cache_dir=None):
+def loadOTSModel(name='gpt2', cache_dir=None):
     model = GPT2LMHeadModel.from_pretrained(
-        "gpt2", cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        name, cache_dir=f"{cache_dir}/hf" if cache_dir else None
         )
     tokenizer = GPT2Tokenizer.from_pretrained(
-        'gpt2', cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        name, cache_dir=f"{cache_dir}/hf" if cache_dir else None
         )
-    tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "left"
+    if name == 'gpt2':
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"
 
     return model, tokenizer
 
-def loadTokenizer(cache_dir=None):
+def loadTokenizer(name='gpt2', cache_dir=None):
     tokenizer = GPT2Tokenizer.from_pretrained(
-        'gpt2', cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        name, cache_dir=f"{cache_dir}/hf" if cache_dir else None
         )
-    tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "left"
+
+    if name == 'gpt2':
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"
 
     return tokenizer
 
@@ -118,8 +121,8 @@ def wikiDataloader(
     return dataloader
 
 
-def loadTrainedModel(modelPath, cache_dir=None, tokenizer=True):
-    model, tok = loadOTSModel(cache_dir=cache_dir)
+def loadTrainedModel(modelPath, name='gpt2', cache_dir=None, tokenizer=True):
+    model, tok = loadOTSModel(name, cache_dir=cache_dir)
     model.load_state_dict(torch.load(modelPath))
     model.eval()
     if not tokenizer:

@@ -19,6 +19,7 @@ import utils
 from config import TrainConfig, EditConfig, SelfSampleConfig
 from evaluate import performOneEdit
 from alg.senn import ConditionedLinear
+from masked_lm.data import MaskedLMDataloader
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -353,6 +354,8 @@ class SelfSampleTrainer(EditTrainer):
         self.model.eval()
         self.model.to(self.device)
 
+        self.model_name = self.config.model_name
+
         if self.config.split_params:
             ConditionedLinear.add_conditioners(self.model)
         
@@ -381,8 +384,43 @@ class SelfSampleTrainer(EditTrainer):
         edit_tokens, edit_mask = edit_tokens.to(self.device), edit_mask.to(self.device)
 
         return edit_tokens, edit_mask, edit_labels
+
+    def processMaskedLMData(self, masked_sentence, template, obj, edit_obj):
+        il = self.config.inner_loop
+        il_select = (np.random.randint(0,2) if il == 'random' else 1 if il == 'sentence' else 0)
+        lm_data = masked_sentence if il_select == 0 else template
+        edit_data = masked_sentence if il_select == 1 else template 
+
+        lm_tokens, lm_mask = lm_data
+        lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
+
+        lm_labels, _ = obj
+        lm_labels = lm_labels.to(self.device)
+
+        edit_tokens_batch, edit_mask_batch = tuple(zip(*edit_example))
+        edit_tokens, edit_mask = (
+            edit_tokens.to(self.device), 
+            edit_mask.to(self.device)
+            )
+
+        edit_labels, _ = edit_obj
+        edit_labels = edit_labels.to(self.device)
+        
+        # List of tuples
+        edit_batch = [_process_edit_tokens(et, em) for (et, em) in
+                      zip(edit_tokens_batch, edit_mask_batch)]
+
+        # Tuple of lists
+        edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = tuple(zip(*edit_batch))
+
+        return (
+            lm_tokens, lm_mask, lm_labels, 
+            edit_tokens, edit_mask, edit_labels, 
+            edit_locs, gold_tokens
+            )
+
     
-    def processLMData(self, lm_data, edit_example):
+    def processLMData(self, lm_data, edit_example, _, _):
         lm_tokens, lm_mask = lm_data[0]
         lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
         lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
@@ -392,7 +430,7 @@ class SelfSampleTrainer(EditTrainer):
         # remove left padding
         def _process_edit_tokens(edit_tokens, edit_mask):
             edit_tokens = edit_tokens.squeeze(0)
-            indices = edit_tokens != 50256
+            indices = edit_tokens != self.tokenizer.pad_token_id
             edit_tokens = edit_tokens[indices].unsqueeze(0)
             edit_mask = edit_mask.squeeze(0)
             edit_mask = edit_mask[indices].unsqueeze(0)
@@ -419,6 +457,10 @@ class SelfSampleTrainer(EditTrainer):
 
         return lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens
 
+    def processData(self):
+
+        return self.processLMData if self.model_name == 'gpt2' else self.processMaskedLMData
+
     def validateSelfSampleTraining(self):
         self.model.eval()
 
@@ -432,8 +474,9 @@ class SelfSampleTrainer(EditTrainer):
 
             indices = [idx % len(data) for idx in range(self.val_iter, self.val_iter + 10)]  # select 10 elements
             subset = Subset(data.dataset, indices)
-            for batch_idx, (lm_data, edit_example, _, _) in enumerate(subset):
-                lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = self.processLMData(lm_data, edit_example)
+            for batch_idx, (lm_data, edit_example, label1, label2) in enumerate(subset):
+                (lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens 
+                = self.processData(lm_data, edit_example, label1, label2))
 
                 orig_ppl = self.perplexity(self.model, data)
                 model_out, logit_hist, ll_change, loss = performOneEdit(
@@ -491,8 +534,9 @@ class SelfSampleTrainer(EditTrainer):
         for epoch in range(self.config.epochs):
             self.epoch = epoch
             
-            for train_step, (lm_data, edit_example, _, _) in enumerate(self.data):
-                lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = self.processLMData(lm_data, edit_example)
+            for train_step, (lm_data, edit_example, label1, label2) in enumerate(self.data):
+                (lm_tokens, lm_mask, lm_labels, edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = 
+                self.processData(lm_data, edit_example, label1, label2))
 
                 # Compute base loss
                 base_out = self.model(

@@ -15,7 +15,7 @@ class TrainConfig:
 class SelfSampleConfig:
     def __init__(self):
         self.task = 'T5_self_sample'
-        self.model_type = 'T5'
+        self.model_name = 't5-small' #t5-small or gpt2
         self.inner_loop = 'template' #sentence, template, or random
 
         self.inner_lr = 1e-2
