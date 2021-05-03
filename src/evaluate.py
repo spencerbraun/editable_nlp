@@ -122,7 +122,7 @@ def performOneEdit(
         
         model.load_state_dict(fmodel.state_dict())
     
-    return model, logit_hist
+    return model, logit_hist, ll_change, output.loss
 
 def genModelText(finetuned, lm_tokens):
 

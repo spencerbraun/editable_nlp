@@ -20,7 +20,7 @@ class ConditionedLinear(nn.Module):
         l_edit = ... # compute outer loop loss
         """
         def _recursive_apply(module: nn.Module):
-            for mod, name in module.named_children():
+            for name, mod in module.named_children():
                 if isinstance(mod, nn.Linear):
                     setattr(module, name, ConditionedLinear(w=mod.weight, b=mod.bias, mode="ip"))
                 else:
