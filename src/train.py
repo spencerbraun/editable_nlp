@@ -19,7 +19,6 @@ from torch.utils.data import Subset
 import utils
 from config import TrainConfig, EditConfig, SelfSampleConfig
 from evaluate import performOneEdit
-from alg.senn_conditional import ConditionalLinearWrapper
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -69,7 +68,7 @@ class BaseTrainer:
                     out_obj, 
                     self.statepath(name, self.epoch, 9999)
                     )
-            elif (train_step > 0) & (train_step % self.config.model_save_pt == 0):
+            elif (train_step > 0) and (train_step % self.config.model_save_pt == 0):
                 torch.save(
                     out_obj, 
                     self.statepath(name, self.epoch, train_step)
@@ -157,12 +156,7 @@ class EditTrainer(BaseTrainer):
         )
         self.model.eval()
         self.model.to(self.device)
-        
-        # Default inner loop adaptation parameters
-        def _inner_params(self):
-            return list(self.transformer.h[-3:].parameters())
-        self.model.inner_params = _inner_params.__get__(self.model)
-        
+
     def validateEditTraining(self):
         self.model.eval()
         iters = 0
@@ -360,12 +354,8 @@ class SelfSampleTrainer(EditTrainer):
         )
 
         if self.config.split_params:
-            # find Conv1D layers to replace (they annoyingly have transposed weights)
-            conv_predicate = lambda mod: (
-                isinstance(mod, transformers.models.gpt2.modeling_gpt2.Conv1D) and mod.weight.shape[1] == 768
-            )
-            ConditionalLinearWrapper.wrap_model(self.model, self.model.config.n_embd, -1, conv_predicate)
-        
+            utils.split_conv_layers(self.model)
+
     def genModelText(self, lm_tokens):
         
         len_lm = lm_tokens.shape[-1]
@@ -640,7 +630,7 @@ class SelfSampleTrainer(EditTrainer):
                     print("Reached max iterations")
                     break
             
-                if (train_step % 200 == 0) & (not self.config.debug):
+                if (train_step % 200 == 0) and (not self.config.debug):
                     self.validateSelfSampleTraining()
         
         self.saveState(self.model, global_iter, final=True, name="self_sample")
@@ -688,6 +678,7 @@ if __name__ == "__main__":
         config.bs = args.bs
         config.n_edits = args.n_edits
         config.split_params = args.split_params
+        config.debug = args.debug
         trainer = EditTrainer(config, dataloader)
     
     elif args.finetune:

@@ -6,8 +6,11 @@ from shutil import copyfile
 import glob
 import numpy as np
 import torch
+import transformers
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from data_process import TorchDataset, WikitextDataset
+
+from alg.senn_conditional import ConditionalLinearWrapper
 
 def loadOTSModel(cache_dir=None):
     model = GPT2LMHeadModel.from_pretrained(
@@ -118,13 +121,36 @@ def wikiDataloader(
     return dataloader
 
 
-def loadTrainedModel(modelPath, cache_dir=None, tokenizer=True):
+def split_conv_layers(model):
+    # find Conv1D layers to replace (they annoyingly have transposed weights)
+    conv_predicate = lambda mod: (
+        isinstance(mod, transformers.models.gpt2.modeling_gpt2.Conv1D) and mod.weight.shape[1] == 768
+    )
+    ConditionalLinearWrapper.wrap_model(model, model.config.n_embd, -1, conv_predicate)
+
+
+def prep_for_maml(model, adapt_all: bool = False):
+    # Default inner loop adaptation parameters
+    def _inner_params(self):
+        if adapt_all:
+            return list(self.transformer.h.parameters())
+        else:
+            return list(self.transformer.h[-3:].parameters())
+    type(model).inner_params = _inner_params
+
+
+def loadTrainedModel(modelPath, cache_dir=None, tokenizer=True, split_params: bool = False, adapt_all: bool = False):
     model, tok = loadOTSModel(cache_dir=cache_dir)
+    prep_for_maml(model, adapt_all)
+    if split_params:
+        split_conv_layers(model)
+        
     model.load_state_dict(torch.load(modelPath))
     model.eval()
     if not tokenizer:
         return model
     return model, tok
+
 
 def locateSubset(whole, subset):
     whole = whole.flatten().cpu().numpy()
