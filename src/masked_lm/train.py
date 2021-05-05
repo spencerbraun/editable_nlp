@@ -24,7 +24,7 @@ class T5Trainer:
         self.config = config
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-        self.model_dir = f'{self.config.write_loc}/models/t5'
+        self.model_dir = f'{self.config.write_loc}/models/finetune'
         self.model, self.tokenizer = (
             utils.loadT5Model(cache_dir=self.config.write_loc) if not model_path else 
             utils.loadTrainedModel(model_path, cache_dir=self.config.write_loc)

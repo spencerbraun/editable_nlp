@@ -1,6 +1,7 @@
 class TrainConfig:
     def __init__(self):
-        self.task = 'T5_finetune'
+        self.task = 'finetune'
+        self.model_name = 't5-small'
         self.outer_lr = 1e-5
         self.epochs = 1
         self.max_iter = 1.5e4

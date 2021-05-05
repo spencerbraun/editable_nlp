@@ -1,3 +1,9 @@
+import os
+import argparse
+import random
+import pickle
+from tqdm import tqdm
+
 import torch
 import datasets
 from datasets import load_dataset
@@ -17,22 +23,84 @@ class LAMADataset(torch.utils.data.Dataset):
         seed=123,
         mode='finetune'
     ):
-        self.dataset = load_dataset(
-            'lama', 
-            cache_dir=data_loc,
-            split=datasets.ReadInstruction('train', to=pct, unit='%'),
-            keep_in_memory=True
-        )
+        self.data_loc = data_loc
+        self.pct = pct
+        
+        if mode == 'finetune':
+            self.dataset = load_dataset(
+                'lama', 
+                'trex',
+                cache_dir=data_loc,
+                split=datasets.ReadInstruction('train', to=pct, unit='%'),
+                keep_in_memory=True
+            )
+            
+            if shuffle:
+                self.dataset = self.dataset.shuffle(seed=123)
+            if template_filter:
+                self.dataset = self.dataset.filter(
+                     lambda x: x['template'] in template_filter
+                )
+        else:
+            self.edit_location = f"{data_loc}/lama_edited_{self.pct}pct.pkl"
+            if os.path.exists(self.edit_location):
+                print(f"Reusing edited LAMA: {self.edit_location}")
+                with open(self.edit_location, "rb") as f:
+                    self.dataset = pickle.load(f)
+            else: 
+                gen = input(f"Edited LAMA not found ('{self.edit_location}'). Generate? (y/n) ")
+                if gen.lower() == 'y':
+                    print("Generating...")
+                    self.generateEdited(self.data_loc)
+
+                else:
+                    print("Exiting...")
+                    raise AttributeError
+                
         self.mode = mode
-        if shuffle:
-            self.dataset = self.dataset.shuffle(seed=123)
-        if template_filter:
-            self.dataset = self.dataset.filter(
-                 lambda x: x['template'] in template_filter
+        
+    def generateEdited(self, loc):
+        random.seed(123)
+
+        dataset = load_dataset(
+                'lama', 
+                'trex',
+                cache_dir=self.data_loc,
+                split=datasets.ReadInstruction('train', to=self.pct, unit='%')
             )
 
+        dataset = dataset.shuffle(123)
+        templates = list(set(dataset['template']))
+        edit_dict = {k: [] for k in templates}
+        for temp, obj in zip(dataset['template'], dataset['obj_surface']):
+            edit_dict[temp].append(obj)
+
+        edit_dict = {k: list(set(v)) for k, v in edit_dict.items()}
+
+        features = ['masked_sentence', 'template', 'obj_surface', 'sub_surface']
+        data_out = {'edit_surface':[]}
+        for feat in features:
+            data_out[feat] = dataset[feat]
+
+        for idx in tqdm(range(len(dataset))):
+            temp = data_out['template'][idx]
+            obj = data_out['obj_surface'][idx]
+            while True:
+                edit = random.choice(edit_dict[temp])
+                if edit != obj:
+                    break
+
+            data_out['edit_surface'].append(edit)
+
+        with open(self.edit_location, "wb") as f:
+            pickle.dump(data_out, f)
+            print(f'Edited LAMA written to "{self.edit_location}"')
+            self.dataset = data_out
+            print("self.dataset populated")
+
+
     def __len__(self):
-        return len(self.dataset)
+        return len(self.dataset['masked_sentence'])
 
     def __getitem__(self, index):
         
@@ -50,14 +118,14 @@ class LAMADataset(torch.utils.data.Dataset):
         template = template.replace("[X]", sub_surface)
         masked_template = template.replace("[Y]", "<extra_id_0>")
         
-        edit_surface = obj_surface # TODO: replace with edited entity from same template group
+        edit_surface = self.dataset['edit_surface'][index]
         edit_label = f"<extra_id_0> {edit_surface.strip()} <extra_id_1>"
         
         return masked_sent, masked_template, orig_label, edit_label
 
 
 class MaskedLMDataloader:
-    def __init__(self, dataset, loc, mode='finetune', train_pct=80, **kwargs):
+    def __init__(self, dataset, loc, mode, train_pct=80, **kwargs):
         """
         mode in [finetune, editable]
         kwargs:
@@ -131,3 +199,13 @@ class MaskedLMDataloader:
     def validation(self):
         return self.getDataloader(self.valid_ds)
     
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--generate', action='store_true', default=False)
+    args = parser.parse_args()
+    
+    loc = utils.sailPreprocess()
+    
+    if args.generate:
+        generateEdited(loc)

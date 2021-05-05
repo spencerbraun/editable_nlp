@@ -151,15 +151,17 @@ class EditTrainer(BaseTrainer):
             cache_dir=self.config.write_loc,
             tokenizer=False
         )
+
         self.model.eval()
         self.model.to(self.device)
         
         # Default inner loop adaptation parameters
         def _inner_params(self):
-            if self.model_name == 'gpt2':
+            if hasattr(self, 'transformer'):
                 return list(self.transformer.h[-3:].parameters())
-            elif self.model_name == 't5-small':
-                return list(self.encoder.block[-2:]) + list(self.decoder.block[-2:])
+            else:
+                return (list(self.encoder.block[-2:].parameters()) + 
+                        list(self.decoder.block[-2:].parameters()))
         self.model.inner_params = _inner_params.__get__(self.model)
         
     def validateEditTraining(self):
@@ -728,7 +730,7 @@ if __name__ == "__main__":
     config.n_edits = args.n_edits
     config.split_params = args.split_params
     config.write_loc = loc
-    config.debug = args.debug
+    config.debug = args.debug if args.debug else config.debug
 
     if (args.editable or args.self_sample):
         train = utils.retrieveEditDataloader(
