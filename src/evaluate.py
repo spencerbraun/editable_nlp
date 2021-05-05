@@ -82,11 +82,15 @@ def performOneEdit(
     gold_tokens,
     n_edit_steps=10
     ):
-    
+
+    if not hasattr(model, "inner_params"):
+        raise RuntimeError("Model has no `inner_params.` An `inner_params`"
+                           " function should be patched in after model creation"
+                           " and before editing.")
     model.train()
     param_groups = [
         {'params': p, 'lr': 1e-3} 
-        for p in model.transformer.h[-3:].parameters()
+        for p in model.inner_params()
     ]
     inner_opt = (torch.optim.SGD(param_groups))
     
@@ -100,16 +104,20 @@ def performOneEdit(
         inner_opt, 
         override={'lr': lrs} if lrs else None,
         copy_initial_weights=False, 
-        track_higher_grads=True
+        track_higher_grads=False # We don't need these because we're only evaluating (no outer loop)
         ) as (fmodel, diffopt):
         
         for edit_step in range(n_edit_steps):
 
+            if hasattr(fmodel, "set_editing"):
+                fmodel.set_editing(True)
             output = fmodel(
                 edit_tokens, 
                 attention_mask=edit_mask,
                 labels=edit_labels
             )
+            if hasattr(fmodel, "set_editing"):
+                fmodel.set_editing(False)
             diffopt.step(output.loss)
 
             logit_hist.append(
@@ -119,10 +127,13 @@ def performOneEdit(
             ll_change = (abs(logit_hist[0]) - abs(logit_hist[-1]))/abs(logit_hist[0])
             print(f"logit history: {logit_hist}")
             print(f"Edit step {edit_step}; ll change {ll_change} , logit {logit_hist[-1]}, loss {output.loss}")
-        
-        model.load_state_dict(fmodel.state_dict())
-    
-    return model, logit_hist, ll_change, output.loss
+
+    # To prevent PyTorch warning, since fmodel has torch.tensor parameters instead of nn.Parameter parameters
+    #  TODO: resolve the right way to have a single edit implementation for train/eval and fix/remove this
+    for p in fmodel.parameters():
+        p.requires_grad_().retain_grad()
+            
+    return fmodel, logit_hist, ll_change, output.loss
 
 def genModelText(finetuned, lm_tokens):
 
