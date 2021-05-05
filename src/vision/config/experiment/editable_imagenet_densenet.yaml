@@ -1,0 +1,22 @@
+# @package _global_
+
+task: editable
+model: densenet169
+pretrained: True
+model_path: '???'
+dataset: imagenet
+num_classes: 1000
+bs: 128
+
+epochs: 2
+loss: kl
+outer_lr: 1.0e-7
+inner_lr: 5.0e-6
+n_edit_steps: 10
+cedit: 0.1
+cloc: 0.01
+learnable_lr: True
+lr_lr: 1.0e-07
+
+model_save_pt: 1000
+silent: False

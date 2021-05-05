@@ -1,5 +1,4 @@
 import os
-import argparse
 import glob
 import time
 import random
@@ -15,35 +14,39 @@ from torch.utils.data import DataLoader, RandomSampler, Subset
 from torchvision.models import resnet18, densenet169
 import higher
 
+from omegaconf import DictConfig, OmegaConf, open_dict
+import hydra
+
 import wandb
 import utils
 from data_process import loadCIFAR, loadImageNet
-from config import TrainConfig, EditConfig
 from evaluate import accuracy, get_logprobs
 
 eps = np.finfo(np.float32).eps.item()
-model_paths = {
-    ('cifar', 'resnet18'): 'models/cifar/resnet18/finetune/finetune_epoch199_ts9999.20210429.19.04.1619750982',
-    ('imagenet', 'resnet18'): None,
-    ('imagenet', 'densenet169'): None,
-}
+
 
 class BaseTrainer:
-    def __init__(self, config, train_set, val_set, model_path=None):
+    def __init__(self, config, train_set, val_set):
 
         # config
         self.config = config
+
         self.model_dir = (
-            f'{self.config.write_loc}/models/{self.config.dataset}/{self.config.arch}/finetune' if self.config.task == 'finetune'
+            f'{self.config.write_loc}/models/{self.config.dataset}/{self.config.model}/finetune' if self.config.task == 'finetune'
             else f'{self.config.write_loc}/models'
         )
-        self.num_classes = 10 if self.config.dataset == 'cifar' else 1000
-        load_model = densenet169 if self.config.arch == 'densenet169' else resnet18
-        pretrained = self.config.dataset == 'imagenet'  # torchvision models are pretrained on ImageNet
-        self.model = (
-            utils.loadOTSModel(load_model, self.num_classes, pretrained=pretrained) if not model_path else
-            utils.loadTrainedModel(model_path, load_model, self.num_classes)
-        )
+
+        load_model = densenet169 if config.model == 'densenet169' else resnet18
+        self.model = utils.loadOTSModel(load_model, self.config.num_classes, self.config.pretrained)
+        if not self.config.pretrained and not OmegaConf.is_missing(self.config, 'model_path'):
+            model_path = os.path.join(self.config.write_loc, self.config.model_path)
+            self.model.load_state_dict(torch.load(model_path))
+            print(f"Loaded model weights from {model_path}")
+        self.original_model = copy.deepcopy(self.model)
+
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.model.to(self.device)
+        self.original_model.to(self.device)
 
         # outfiles
         self.timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
@@ -57,14 +60,14 @@ class BaseTrainer:
         self.train_set = train_set
         self.val_set = val_set
 
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.configure_optimizers()
 
         if not self.config.debug:
             wandb.init(
                 project='patchable-cnn',
                 entity='patchable-lm',
                 config=self.config,
-                name=f"{self.config.dataset}/{self.config.arch}/{self.config.task}_{self.timestamp}",
+                name=f"{self.config.dataset}/{self.config.model}/{self.config.task}_{self.timestamp}",
                 dir=self.config.write_loc,
             )
             wandb.watch(self.model)
@@ -90,6 +93,29 @@ class BaseTrainer:
                 f"; ".join([f"{key} {val}" for key,val in kwargs.items()])
             ))
 
+    def getEditParams(self, model):
+        return model.parameters()
+
+    def compute_base_loss(self, inputs, labels):
+        if self.config.loss == 'cross_entropy':
+            logits = self.model(inputs)
+            loss = F.cross_entropy(logits, labels)
+
+        elif self.config.loss == 'kl':
+            logits = self.model(inputs)
+            self.original_model.eval()
+            with torch.no_grad():
+                orig_logits = self.original_model(inputs)
+
+            loss = (
+                F.softmax(logits, dim=-1) *
+                (
+                    F.log_softmax(logits, dim=-1) - 
+                    F.log_softmax(orig_logits, dim=-1)
+                )).sum(-1).mean()
+
+        return loss, logits
+
     def train_step(self, inputs, labels):
         inputs = inputs.to(self.device)
         labels = labels.to(self.device)
@@ -97,9 +123,8 @@ class BaseTrainer:
         self.model.train()
         self.opt.zero_grad()
 
-        logits = self.model(inputs)
+        loss, logits = self.compute_base_loss(inputs, labels)
         acc1, acc5 = accuracy(logits, labels, topk=(1,5))
-        loss = F.cross_entropy(logits, labels)
         loss.backward()
         self.opt.step()
 
@@ -114,7 +139,7 @@ class BaseTrainer:
                 'acc/top5_train': acc5,
             })
         
-        return loss, acc1, acc5
+        return loss.item(), acc1, acc5
 
     def val_step(self):
         self.model.eval()
@@ -132,9 +157,8 @@ class BaseTrainer:
             inputs = inputs.to(self.device)
             labels = labels.to(self.device)
 
-            logits = self.model(inputs)
+            loss, logits = self.compute_base_loss(inputs, labels)
             acc1, acc5 = accuracy(logits, labels, topk=(1, 5))
-            loss = F.cross_entropy(logits, labels)
 
         print('Epoch {} Validation\tLoss: {:.2f}\tTop-1 acc: {:.2f}\tTop-5 acc: {:.2f}'.format(
                 self.epoch, loss, acc1, acc5))
@@ -145,6 +169,8 @@ class BaseTrainer:
                 'acc/top1_val_avg': acc1,
                 'acc/top5_val_avg': acc5,
             })
+        
+        return loss.item(), acc1, acc5
 
     def run(self):
         if not self.config.debug:
@@ -152,13 +178,10 @@ class BaseTrainer:
 
         self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config.outer_lr)
         self.scheduler = None
-        # opt = torch.optim.SGD(self.model.parameters(), lr=self.config.outer_lr, momentum=0.9, weight_decay=5e-4)
-        # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.opt, T_max=200)
 
         self.model.train()
-        self.model.to(self.device)
         self.global_iter = 0
-        train_loader = DataLoader(self.train_set, batch_size=config.bs, shuffle=True, num_workers=2)
+        train_loader = DataLoader(self.train_set, batch_size=self.config.bs, shuffle=True, num_workers=2)
 
         print("Starting training")
 
@@ -179,7 +202,7 @@ class BaseTrainer:
                 if self.global_iter % 100 == 0:
                     self.val_step()
 
-                self.saveState(self.model, train_step, self.config.arch)
+                self.saveState(self.model, train_step, self.config.model)
                 self.global_iter += 1
 
             print('Epoch {} Train\tLoss: {:.2f}\tTop-1 acc: {:.2f}\tTop-5 acc: {:.2f}'.format(
@@ -198,16 +221,24 @@ class BaseTrainer:
                 self.scheduler.step()
 
         self.saveState(self.model, 0, final=True)
+        if self.config.learnable_lr:
+            self.saveState(self.lrs, self.global_iter, final=True, name='lr')
+    
+    def configure_optimizers(self):
+        self.opt = torch.optim.Adam(self.getEditParams(self.model), lr=self.config.outer_lr)
+        self.scheduler = None
+        self.lrs = None
+        self.lr_opt = None
 
 
 class EditTrainer(BaseTrainer):
     def __init__(self, config, train_set, val_set, model_path=None):
-        super().__init__(config, train_set, val_set, model_path)
+        super().__init__(config, train_set, val_set)
         self.train_edit_gen = self.editGenerator('train')
         self.val_edit_gen = self.editGenerator('val')
 
     def getEditParams(self, model):
-        if self.config.arch == 'resnet18':
+        if self.config.model == 'resnet18':
             return model.layer3.parameters()
         else:
             return model.features.denseblock3.parameters()
@@ -218,47 +249,55 @@ class EditTrainer(BaseTrainer):
         while True:
             for inputs, labels in DataLoader(edit_dataset, sampler=sampler, batch_size=1, num_workers=2):
                 inputs = inputs.to(self.device)
-                edit_labels = torch.randint_like(labels, self.num_classes, device=self.device)
+                edit_labels = torch.randint_like(labels, self.config.num_classes, device=self.device)
                 yield inputs, edit_labels
 
-    def performEdits(self, edit_inputs, edit_labels):
-        model_ = copy.deepcopy(self.model)
-        loss_hist, lp_hist, ll_change_hist = [], [], []
+    def performEdits(self, model, edit_inputs, edit_labels):
+        lp_hist = []
+        l_edit, ll_change, edit_success = 0.0, 0.0, 0.0
 
-        model_.eval()
-        lp_hist.append(get_logprobs(model_, edit_inputs, edit_labels))
+        model.eval()
+        lp_hist.append(get_logprobs(model, edit_inputs, edit_labels))
 
-        model_.train()
         param_groups = [
             {'params': p, 'lr': None} 
-            for p in self.getEditParams(model_)
+            for p in self.getEditParams(model)
         ]
-        inner_opt = torch.optim.SGD(param_groups)
+        inner_opt = (
+            torch.optim.SGD(param_groups) if self.config.learnable_lr
+            else torch.optim.SGD(
+                self.getEditParams(model),
+                lr=self.config.inner_lr
+            )
+        )
 
-        with higher.innerloop_ctx(
-            model_,
-            inner_opt,
-            override={'lr': self.lrs} if self.config.learnable_lr else None,
-            copy_initial_weights=False, 
-            track_higher_grads=True
-        ) as (fmodel, diffopt):
-            for edit_step in range(self.config.n_edit_steps):
-                fmodel.eval()  # needed for batchnorm to work properly on batch size of 1
-                loss = F.cross_entropy(fmodel(edit_inputs), edit_labels)
-                diffopt.step(loss)
+        with torch.enable_grad():
+            with higher.innerloop_ctx(
+                model,
+                inner_opt,
+                override={'lr': self.lrs} if self.config.learnable_lr else None,
+                copy_initial_weights=False,
+                track_higher_grads=True
+            ) as (fmodel, diffopt):
+                for edit_step in range(self.config.n_edit_steps):
+                    fmodel.eval()  # needed for batchnorm to work properly on batch size of 1
+                    edit_logits = fmodel(edit_inputs)
+                    loss = F.cross_entropy(edit_logits, edit_labels)
+                    diffopt.step(loss)
 
-                lp = get_logprobs(fmodel, edit_inputs, edit_labels)
-                ll_change = torch.mean(abs(lp_hist[0]) - abs(lp)) / (abs(lp_hist[0]) + eps)
-                print(f"log prob history: {lp_hist}")
-                print(f"Edit step {edit_step}; ll change {ll_change}, log prob {lp}, loss {loss}")
+                    lp = get_logprobs(fmodel, edit_inputs, edit_labels)
+                    lp_hist.append(lp)
 
-                loss_hist.append(loss)
-                lp_hist.append(lp)
-                ll_change_hist.append(ll_change)
+        edit_logits = fmodel(edit_inputs)
+        l_edit = F.cross_entropy(edit_logits, edit_labels)
+        edit_success = np.mean(torch.eq(torch.argmax(edit_logits, -1), edit_labels).cpu().numpy())
+        ll_change = np.mean(abs(lp_hist[0]) - abs(lp_hist[-1]) / (abs(lp_hist[0]) + eps))
 
-            model_.load_state_dict(fmodel.state_dict())
+        print("Log prob history:", ["{:.2f}".format(i) for i in lp_hist])
+        print("Edit step {}\tll change {:.2f}\tLog prob {:.2f}\tLoss {:.2f}".format(
+                edit_step, ll_change, lp_hist[-1], l_edit))
 
-        return model_, loss_hist, lp_hist, ll_change_hist
+        return fmodel, l_edit, lp_hist, ll_change, edit_success
 
     def train_step(self, inputs, labels):
         inputs = inputs.to(self.device)
@@ -272,63 +311,41 @@ class EditTrainer(BaseTrainer):
 
         total_loss = 0.0
 
-        base_logits = self.model(inputs)
+        l_base, base_logits = self.compute_base_loss(inputs, labels)
         acc1_pre, acc5_pre = accuracy(base_logits, labels, topk=(1,5))
-        l_base = F.cross_entropy(base_logits, labels)  # TODO make loss a config param
         l_base.backward()
-        total_loss += l_base
+        total_loss += l_base.item()
 
-        param_groups = [
-            {'params': p, 'lr': None} 
-            for p in self.getEditParams(self.model)
-        ]
-        inner_opt = (
-            torch.optim.SGD(param_groups) if self.config.learnable_lr
-            else torch.optim.SGD(
-                self.getEditParams(self.model),
-                lr=self.config.inner_lr
-            )
+        model_edited, l_edit, lp_hist, ll_change, edit_success = self.performEdits(
+            self.model,
+            edit_inputs,
+            edit_labels
         )
 
-        with higher.innerloop_ctx(
-            self.model,
-            inner_opt,
-            override={'lr': self.lrs} if self.config.learnable_lr else None,
-            copy_initial_weights=False,
-            track_higher_grads=True,
-        ) as (fmodel, diffopt):
-            for edit_step in range(self.config.n_edit_steps):
-                fmodel.eval()  # needed for batchnorm to work properly on batch size of 1
-                loss = F.cross_entropy(fmodel(edit_inputs), edit_labels)
-                diffopt.step(loss)
+        edited_base_logits = model_edited(inputs)
+        acc1_post, acc5_post = accuracy(edited_base_logits, labels, topk=(1,5))
+        l_loc = (
+            F.softmax(base_logits.detach(), dim=-1) *
+            (
+                F.log_softmax(base_logits.detach(), dim=-1) - 
+                F.log_softmax(edited_base_logits, dim=-1)
+            )).sum(-1).mean()
 
-            edit_logits = fmodel(edit_inputs)
-            l_edit = F.cross_entropy(edit_logits, edit_labels)
-
-            edited_base_logits = fmodel(inputs)
-            acc1_post, acc5_post = accuracy(edited_base_logits, labels, topk=(1,5))
-            l_loc = (
-                F.softmax(base_logits.detach(), dim=-1) *
-                (
-                    F.log_softmax(base_logits.detach(), dim=-1) - 
-                    F.log_softmax(edited_base_logits, dim=-1)
-                )).sum(-1).mean()
-            
-            total_edit_loss = (
-                self.config.cloc * l_loc  + 
-                self.config.cedit * l_edit
-            )  # / self.config.n_edits
-            total_edit_loss.backward()
-            total_loss += total_edit_loss
+        total_edit_loss = (
+            self.config.cloc * l_loc  + 
+            self.config.cedit * l_edit
+        )  # / self.config.n_edits
+        total_edit_loss.backward()
+        total_loss += total_edit_loss.item()
 
         self.opt.step()
         if self.config.learnable_lr:
             self.lr_opt.step()
             self.saveState(self.lrs, self.global_iter, name='lr')
 
-        print('Train step {}\tLoss: {:.2f}\tPre-edit top-1 acc: {:.2f}\tPost-edit top-1 acc: {:.2f}\t' \
+        print('Train step {}\tLoss: {:.2f}\tEdit success: {:.2f}\tPre-edit top-1 acc: {:.2f}\tPost-edit top-1 acc: {:.2f}\t' \
                 'Pre-edit top-5 acc: {:.2f}\tPost-edit top-5 acc: {:.2f}'.format(
-                self.global_iter, total_loss, acc1_pre, acc1_post, acc5_pre, acc5_post))
+                self.global_iter, total_loss, edit_success, acc1_pre, acc1_post, acc5_pre, acc5_post))
 
         if not self.config.debug:
             wandb.log({
@@ -337,6 +354,7 @@ class EditTrainer(BaseTrainer):
                 'loss/edit': l_edit,
                 'loss/local': l_loc,
                 'loss/train': total_loss,
+                'edit_success_train': edit_success,
                 'acc/top1_pre_train': acc1_pre,
                 'acc/top5_pre_train': acc5_pre,
                 'acc/top1_post_train': acc1_post,
@@ -349,7 +367,7 @@ class EditTrainer(BaseTrainer):
     def val_step(self):
         top1_pre, top5_pre = [], []
         top1_post, top5_post = [], []
-        losses, ll_changes = [], []
+        losses, ll_changes, edit_successes = [], [], []
 
         val_subset = Subset(self.val_set, np.random.randint(0, len(self.val_set), 100))
         val_loader = DataLoader(
@@ -359,42 +377,34 @@ class EditTrainer(BaseTrainer):
             num_workers=2
         )
 
-        for edit_num, (edit_inputs, edit_labels) in enumerate(list(itertools.islice(self.val_edit_gen, 10))):
-            top1 = utils.AverageMeter('Acc@1', ':6.2f')
-            top5 = utils.AverageMeter('Acc@5', ':6.2f')
+        total_loss = 0.0
 
-            total_loss = 0.0
+        with torch.no_grad():
+            self.model.eval()
+            inputs, labels = next(iter(val_loader))
+            inputs = inputs.to(self.device)
+            labels = labels.to(self.device)
 
-            with torch.no_grad():
-                self.model.eval()
-                inputs, labels = next(iter(val_loader))
-                inputs = inputs.to(self.device)
-                labels = labels.to(self.device)
+            l_base, base_logits = self.compute_base_loss(inputs, labels)
+            acc1_pre, acc5_pre = accuracy(base_logits, labels, topk=(1, 5))
+            total_loss += l_base.item()
 
-                base_logits = self.model(inputs)
-                acc1, acc5 = accuracy(base_logits, labels, topk=(1, 5))
-                l_base = F.cross_entropy(base_logits, labels)
-                total_loss += l_base
+            top1_pre.append(acc1_pre)
+            top5_pre.append(acc5_pre)
 
-                top1.update(acc1, inputs.shape[0])
-                top5.update(acc5, inputs.shape[0])
+            for edit_num, (edit_inputs, edit_labels) in enumerate(list(itertools.islice(self.val_edit_gen, 10))):
+                
+                model_edited, l_edit, lp_hist, ll_change, edit_success = self.performEdits(
+                    self.model,
+                    edit_inputs,
+                    edit_labels,
+                )
+                ll_changes.append(ll_change)
+                edit_successes.append(edit_success)
 
-            top1_pre.append(top1.avg)
-            top5_pre.append(top5.avg)
-
-            top1.reset()
-            top5.reset()
-
-            model_edited, loss_hist, lp_hist, ll_change_hist = self.performEdits(edit_inputs, edit_labels)
-            l_edit = loss_hist[-1]
-            ll_change = torch.mean(abs(lp_hist[0]) - abs(lp_hist[-1])) / (abs(lp_hist[0]) + eps)
-            ll_changes.append(ll_change)
-
-            with torch.no_grad():
                 model_edited.eval()
-
                 edited_base_logits = model_edited(inputs)
-                acc1, acc5 = accuracy(edited_base_logits, labels, topk=(1, 5))
+                acc1_post, acc5_post = accuracy(edited_base_logits, labels, topk=(1, 5))
                 l_loc = (
                     F.softmax(base_logits, dim=-1) *
                     (
@@ -402,89 +412,65 @@ class EditTrainer(BaseTrainer):
                         F.log_softmax(edited_base_logits, dim=-1)
                     )).sum(-1).mean()
 
-                top1.update(acc1, inputs.shape[0])
-                top5.update(acc5, inputs.shape[0])
-
                 total_edit_loss = (
                     self.config.cloc * l_loc  + 
                     self.config.cedit * l_edit
                 ) # / self.config.n_edits
-                total_loss += total_edit_loss
+                total_loss += total_edit_loss.item()
+                losses.append(total_loss)
 
-            losses.append(total_loss.item())
-            top1_post.append(top1.avg)
-            top5_post.append(top5.avg)
+            top1_post.append(acc1_post)
+            top5_post.append(acc5_post)
 
-        print('Epoch {} Validation\tLoss: {:.2f}\tPre-edit top-1 acc: {:.2f}\tPost-edit top-1 acc: {:.2f}\t' \
+        print('Epoch {} Validation\tLoss: {:.2f}\tEdit success: {:.2f}\tPre-edit top-1 acc: {:.2f}\tPost-edit top-1 acc: {:.2f}\t' \
                 'Pre-edit top-5 acc: {:.2f}\tPost-edit top-5 acc: {:.2f}'.format(
-                self.epoch, np.mean(losses), np.mean(top1_pre), np.mean(top1_post),
-                np.mean(top5_pre), np.mean(top5_post)))
+                self.epoch, np.mean(losses), np.mean(edit_successes), np.mean(top1_pre),
+                np.mean(top1_post), np.mean(top5_pre), np.mean(top5_post)))
         if not self.config.debug:
             wandb.log({
                 'step': self.global_iter,
                 'loss/val': np.mean(losses),
+                'edit_success_val': np.mean(edit_successes),
                 'acc/top1_pre_val': np.mean(top1_pre),
                 'acc/top1_post_val': np.mean(top1_post),
                 'acc/top5_pre_val': np.mean(top5_pre),
                 'acc/top5_post_val': np.mean(top5_post),
             })
 
-    def run(self):
+    def configure_optimizers(self):
+        super().configure_optimizers()
         self.lrs = [
             torch.nn.Parameter(torch.tensor(self.config.inner_lr)) 
             for p in self.getEditParams(self.model)
         ]
-        self.lr_opt = torch.optim.Adam(self.lrs, lr=self.config.lr_lr)
-
-        super().run()
-
-        if self.config.learnable_lr:
-            self.saveState(self.lrs, self.global_iter, final=True, name='lr')
+        self.lr_opt = torch.optim.SGD(self.lrs, lr=self.config.lr_lr)
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--seed', type=int, default=123)
-    parser.add_argument('--editable', action='store_true')
-    parser.add_argument('--dataset',
-        choices=['cifar', 'imagenet'],
-        default='imagenet',
-        help='Which dataset to use.',
-    )
-    parser.add_argument('--arch',
-        choices=['resnet18', 'densenet169'],
-        default='resnet18',
-        help='Which model architecture to use.',
-    )
-    parser.add_argument('--bs', type=int, default=4)
-    args = parser.parse_args()
-
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
+@hydra.main(config_path='config', config_name='config')
+def main(config: DictConfig):
+    print(OmegaConf.to_yaml(config))
 
     loc = utils.sailPreprocess()
 
-    train_set = loadCIFAR(loc, 'train') if args.dataset == 'cifar' else loadImageNet(loc, 'train')
-    val_set = loadCIFAR(loc, 'val') if args.dataset == 'cifar' else loadImageNet(loc, 'val')
+    train_set = loadCIFAR(loc, 'train') if config.dataset == 'cifar10' else loadImageNet(loc, 'train')
+    val_set = loadCIFAR(loc, 'val') if config.dataset == 'cifar10' else loadImageNet(loc, 'val')
 
-    if args.editable:
-        config = EditConfig()
+    OmegaConf.set_struct(config, True)
+    with open_dict(config):
         config.write_loc = loc
-        config.dataset = args.dataset
-        config.arch = args.arch
-        config.bs = args.bs
-        model_path = model_paths[(config.dataset, config.arch)]
 
-        trainer = EditTrainer(config, train_set, val_set, model_path)
+    if config.task == 'editable':
+        trainer = EditTrainer(config, train_set, val_set)
 
     else:
-        config = TrainConfig()
-        config.write_loc = loc
-        config.dataset = args.dataset
-        config.arch = args.arch
-        config.bs = args.bs
-
         trainer = BaseTrainer(config, train_set, val_set)
 
     trainer.run()
+
+
+if __name__ == '__main__':
+    random.seed(123)
+    np.random.seed(123)
+    torch.manual_seed(123)
+
+    main()

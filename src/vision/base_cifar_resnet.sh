@@ -7,4 +7,4 @@
 #SBATCH --gres=gpu:1 # Request one GPU
 
 source /iris/u/clin/code/editable_nlp/env/bin/activate
-python3 src/vision/train.py --editable --dataset cifar --arch resnet18 --bs 128
+python3 src/vision/train.py experiment=base_cifar_resnet

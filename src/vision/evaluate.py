@@ -28,9 +28,5 @@ def get_logprobs(model, inputs, labels):
         base_logits = model(inputs)
         base_lps = F.log_softmax(base_logits, dim=-1).detach().cpu()
     
-    return base_lps[:, labels]
-
-
-
-
+    return base_lps[:, labels].item()
 

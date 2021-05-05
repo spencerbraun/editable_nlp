@@ -1,0 +1,3 @@
+debug: False
+defaults:
+  - experiment: base_cifar_resnet
