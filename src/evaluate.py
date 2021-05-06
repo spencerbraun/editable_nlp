@@ -263,8 +263,7 @@ def evalSelfSample(
     model_number = 0
     sequential = seq_edits > 1
     
-    model.to(DEVICE)
-    model_edited = copy.deepcopy(model)
+    model_edited = copy.deepcopy(model).to(DEVICE)
 
     orig_ppl = perplexity(model, dataloader)
     orig_params = get_params(model)

@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import transformers
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
-from data_process import TorchDataset, WikitextDataset
+from data_process import TorchDataset, WikitextDataset, NTokenDataset
 
 from alg.senn_conditional import ConditionalLinearWrapper
 
@@ -33,17 +33,8 @@ def loadTokenizer(cache_dir=None):
 
     return tokenizer
 
-def retrieveEditDataloader(
-    tokenizer, 
-    bs=10, 
-    data_loc='..',
-    dataset='train', 
-    max_obs=float('inf'),
-    shuffle=False,
-    self_sample=False,
-    n_edits=1,
-):
 
+def _getFileIds(data_loc, self_sample, dataset, max_obs):
     data_path = f"{data_loc}/data/self_sample" if self_sample else f"{data_loc}/data"
     if self_sample:
         writtenFiles = (
@@ -60,8 +51,23 @@ def retrieveEditDataloader(
 
     fileIndex = max(map(lambda x: int(x.split(".")[-1]), writtenFiles))
     limitIndex = min(max_obs, fileIndex)
+
+    return list(range(limitIndex))
+
+
+def retrieveEditDataloader(
+    tokenizer, 
+    bs=10, 
+    data_loc='..',
+    dataset='train', 
+    max_obs=float('inf'),
+    shuffle=False,
+    self_sample=False,
+    n_edits=1,
+):
+
     ds = TorchDataset(
-        list(range(limitIndex)),
+        _getFileIds(data_loc, self_sample, dataset, max_obs),
         tokenizer,
         data_loc=data_loc,
         dataset=dataset,
@@ -77,6 +83,28 @@ def retrieveEditDataloader(
     )
 
     return dataloader
+
+
+def retrieveUnifiedDataset(
+    tokenizer, 
+    bs=10, 
+    data_loc='..',
+    dataset='train', 
+    max_obs=float('inf'),
+    shuffle=False,
+    self_sample=False,
+    n_edits=1,
+):
+    return NTokenDataset(
+        _getFileIds(data_loc, self_sample, dataset, max_obs),
+        tokenizer,
+        data_loc=data_loc,
+        dataset=dataset,
+        self_sample=self_sample,
+        batch_size=bs,
+        n_edits=n_edits
+    )
+
 
 def wikiDataloader(
     tokenizer, 

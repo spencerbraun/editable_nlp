@@ -104,6 +104,7 @@ class ConditionalLinearWrapper(nn.Module):
 
 def _test_copy(model):
     import copy
+
     print("default", len(model.default_inner_params()))
     print("inner", len(model.inner_params()))
     modelcopy = copy.deepcopy(model)
@@ -115,14 +116,13 @@ def _test_copy(model):
     else:
         print("SUCCESS")
 
-    
 
 if __name__ == "__main__":
     import transformers
     import utils
 
     model = transformers.GPT2LMHeadModel.from_pretrained("distilgpt2")
-    tok = transformers.GPT2Tokenizer.from_pretrained('distilgpt2')
+    tok = transformers.GPT2Tokenizer.from_pretrained("distilgpt2")
     utils.prep_for_maml(model)
     conv_predicate = lambda mod: (
         isinstance(mod, transformers.models.gpt2.modeling_gpt2.Conv1D)
@@ -130,16 +130,20 @@ if __name__ == "__main__":
     )
     ConditionalLinearWrapper.wrap_model(model, model.config.n_embd, -1, conv_predicate)
 
-    input_ids = tok('This is a test sequence', return_tensors='pt')['input_ids']
+    input_ids = tok("This is a test sequence", return_tensors="pt")["input_ids"]
 
-    grads1 = torch.autograd.grad(model(input_ids, labels=input_ids).loss, model.phi(), allow_unused=True)
+    grads1 = torch.autograd.grad(
+        model(input_ids, labels=input_ids).loss, model.phi(), allow_unused=True
+    )
     model.set_editing(True)
-    print('editing ON')
+    print("editing ON")
     grads2 = torch.autograd.grad(model(input_ids, labels=input_ids).loss, model.phi())
     model.set_editing(False)
-    print('editing OFF')
-    grads3 = torch.autograd.grad(model(input_ids, labels=input_ids).loss, model.phi(), allow_unused=True)
-    
+    print("editing OFF")
+    grads3 = torch.autograd.grad(
+        model(input_ids, labels=input_ids).loss, model.phi(), allow_unused=True
+    )
+
     import pdb
 
     pdb.set_trace()
