@@ -383,46 +383,6 @@ class SelfSampleTrainer(EditTrainer):
 
         return edit_tokens, edit_mask, edit_labels
     
-    def processLMData(self, lm_data, edit_example):
-        lm_tokens, lm_mask = lm_data[0]
-        lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
-        lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
-
-        edit_tokens_batch, edit_mask_batch = tuple(zip(*edit_example))
-
-        # remove left padding
-        def _process_edit_tokens(edit_tokens, edit_mask):
-            edit_tokens = edit_tokens.squeeze(0)
-            indices = edit_tokens != 50256
-            edit_tokens = edit_tokens[indices].unsqueeze(0)
-            edit_mask = edit_mask.squeeze(0)
-            edit_mask = edit_mask[indices].unsqueeze(0)
-
-            edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
-            edit_loc = edit_tokens.shape[-1] - 5 - 1  # minus 1 for newline token
-            edit_locs = torch.tensor([edit_loc + i for i in range(5)])
-            edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
-            gold_tokens = edit_tokens[:, edit_locs]
-
-            edit_labels = edit_labels.to(self.device)
-            edit_tokens, edit_mask = edit_tokens.to(self.device), edit_mask.to(self.device)
-
-            gold_tokens = gold_tokens.cpu()
-
-            return edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens
-
-        # List of tuples
-        edit_batch = [_process_edit_tokens(et, em) for (et, em) in
-                      zip(edit_tokens_batch, edit_mask_batch)]
-
-        # Tuple of lists
-        edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = tuple(zip(*edit_batch))
-        return (
-            lm_tokens, lm_mask, lm_labels,
-            edit_tokens, edit_mask, edit_labels,
-            edit_locs, gold_tokens
-        )
-
     def perplexity(self, model, dataset):
         total_loss = []
         model.to(DEVICE)

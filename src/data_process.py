@@ -145,17 +145,17 @@ class DataProcessor:
 
 class NTokenDataset(torch.utils.data.IterableDataset):
     def __init__(self, list_IDs, tokenizer, data_loc="..", dataset='train', max_length=200, batch_size=1, self_sample=False,
-                 n_edits=1):
+                 n_edits=1, n_edit_tokens=5):
         self.list_IDs = list_IDs
         self.tokenizer = tokenizer
         self.max_length = max_length
-        self.ent_length = 5
         self.dataset = dataset
         self.loc = data_loc
         self.self_sample = self_sample
         self.n_edits = n_edits
         self.wiki = WikitextDataset("/scr/em7", dataset=dataset, filter_=False)
         self.batch_size = batch_size
+        self.n_edit_tokens = n_edit_tokens
 
         if self.dataset == "validation":
             self.dataset = "valid"
@@ -201,8 +201,9 @@ class NTokenDataset(torch.utils.data.IterableDataset):
 
         to_return = [base_tokens, base_mask, loc_tokens, loc_mask, original_tokens, original_mask, edited_tokens, edited_mask]
         to_return = [torch.cat(tensors) for tensors in to_return]
+
         edited_labels = to_return[-2].clone()
-        edited_labels[:,:-(5+1)] = -100
+        edited_labels[:,:-(self.n_edit_tokens+1)] = -100
         edited_labels[:,-1] = -100
         to_return.append(edited_labels)
 
