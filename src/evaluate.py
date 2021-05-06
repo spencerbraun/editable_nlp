@@ -27,20 +27,19 @@ def get_params(model):
     return torch.cat([p.view(-1) for p in model.parameters()])
 
 def perplexity(model, dataloader):
-    total_loss = []
     model.to(DEVICE)
     model.eval()
+    acc = utils.NLLAccumulator()
     with torch.no_grad():
-        for batch_idx, (lm_data, edit_example, _, _) in enumerate(dataloader):
+        for batch_idx, (lm_data, _, _, _) in enumerate(dataloader):
             lm_tokens, lm_mask = lm_data[0]
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
-            out = model(lm_tokens, labels=lm_labels)
+            loss = model(lm_tokens, labels=lm_labels).loss
+            acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels))
 
-            loss = out.loss
-            total_loss.append(loss)
-
-    return torch.exp(torch.mean(torch.stack(total_loss)))
+    avg_loss, ppl = acc.get_metric()
+    return torch.tensor(ppl)
 
 def getIndexedProbs(model, index, gold_tokens, sent_tokens):
 

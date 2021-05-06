@@ -2,6 +2,7 @@ import os
 import platform
 import zipfile
 from shutil import copyfile
+import math
 
 import glob
 import numpy as np
@@ -11,6 +12,30 @@ from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from data_process import TorchDataset, WikitextDataset, NTokenDataset
 
 from alg.senn_conditional import ConditionalLinearWrapper
+
+
+class NLLAccumulator(object):
+    def __init__(self):
+        self.n_total = 0
+        self.nll_sum = 0
+
+    def update(self, nll: float, n: int):
+        self.nll_sum += nll * n
+        self.n_total += n
+
+    def get_metrics(self):
+        avg = self.nll_sum / self.n_total
+        return avg, math.e ** avg
+
+    @staticmethod
+    def n_predictions_for_labels(labels):
+        if labels.dim() == 1:
+            return (labels[1:] != -100).sum().item()
+        elif labels.dim() == 2:
+            return (labels[:, 1:] != -100).sum().item()
+        else:
+            assert False
+
 
 def loadOTSModel(cache_dir=None):
     model = GPT2LMHeadModel.from_pretrained(

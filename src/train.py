@@ -37,7 +37,7 @@ class BaseTrainer:
             )
 
         #outfiles
-        self.timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
+        self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.hyperspath = f"{self.model_dir}/hypers.{self.timestamp}"
         self.errpath = f"{self.config.write_loc}/errors/errors_{self.timestamp}"
         self.statepath = (
@@ -184,6 +184,7 @@ class EditTrainer(BaseTrainer):
         total_loss = []
         model.to(DEVICE)
         model.eval()
+        acc = utils.NLLAccumulator()
         with torch.no_grad():
             for batch_idx, (lm_data, _, _, _) in enumerate(dataset):
                 lm_tokens, lm_mask = lm_data[0]
@@ -192,9 +193,11 @@ class EditTrainer(BaseTrainer):
                 out = model(lm_tokens, labels=lm_labels)
 
                 loss = out.loss
+                acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels))
                 total_loss.append(loss)
 
-        return torch.exp(torch.mean(torch.stack(total_loss)))
+        avg_nll, ppl = acc.get_metrics()
+        return torch.tensor(ppl)
 
     def run(self):
 
@@ -424,16 +427,15 @@ class SelfSampleTrainer(EditTrainer):
         total_loss = []
         model.to(DEVICE)
         model.eval()
+        acc = utils.NLLAccumulator()
         with torch.no_grad():
             for batch_idx, batch in enumerate(dataset):
-                lm_tokens, lm_mask = batch[0].to(DEVICE), batch[1].to(DEVICE)
-                lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
-                out = model(lm_tokens, labels=lm_labels)
+                lm_tokens, lm_mask, lm_labels = self.mask_padding(batch[0], batch[1])
+                loss = model(lm_tokens, labels=lm_labels).loss
+                acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels))
 
-                loss = out.loss
-                total_loss.append(loss)
-
-        return torch.exp(torch.mean(torch.stack(total_loss)))
+        avg_nll, ppl = acc.get_metrics()
+        return torch.tensor(ppl)
 
     def mask_padding(self, tokens, mask):
         return tokens.to(self.device), mask.to(self.device), tokens.masked_fill(mask == 0, -100).to(self.device)
@@ -501,7 +503,7 @@ class SelfSampleTrainer(EditTrainer):
                 f'll_change/{ds}': np.mean(ll_change_hist),
                 f'eval_loss/{ds}': np.mean(loss_hist),
             }
-            self.wandb_log(self.val_iter * 100, metrics)
+            self.wandb_log(self.val_iter * self.config.val_interval, metrics)
             
         self.val_iter += 1
 
@@ -671,7 +673,7 @@ class SelfSampleTrainer(EditTrainer):
                         lr_opt.step()
                         lr_opt.zero_grad()
             
-                if (train_step % 200 == 0) and (not self.config.debug):
+                if (train_step % self.config.val_interval == 0) and (not self.config.debug):
                     self.validateSelfSampleTraining()
         
         self.saveState(self.model, global_iter, final=True, name="self_sample")
@@ -688,6 +690,7 @@ if __name__ == "__main__":
     parser.add_argument('--self_sample', action='store_true')
     parser.add_argument('--bs', default=1, type=int)
     parser.add_argument('--debug', action='store_true')
+    parser.add_argument('--val_interval', type=int, default=200)
     args = parser.parse_args()
     
     loc = utils.sailPreprocess()
@@ -729,12 +732,14 @@ if __name__ == "__main__":
         config.n_edits = args.n_edits
         config.split_params = args.split_params
         config.debug = args.debug
+        config.val_interval = args.val_interval
         trainer = EditTrainer(config, dataloader)
     
     elif args.finetune:
         config = TrainConfig()
         config.write_loc = loc
         config.bs = args.bs
+        config.val_interval = args.val_interval
         trainer = BaseTrainer(config, dataloader)
     
     elif args.self_sample:
@@ -744,6 +749,7 @@ if __name__ == "__main__":
         config.n_edits = args.n_edits
         config.split_params = args.split_params
         config.debug = args.debug
+        config.val_interval = args.val_interval
         trainer = SelfSampleTrainer(config, dataloader, tokenizer)
     
     else:
