@@ -1,7 +1,7 @@
 # @package _global_
 
 task: editable
-model: densenet169
+model: resnet18
 pretrained: True
 model_path: '???'
 dataset: imagenet
@@ -10,11 +10,11 @@ bs: 128
 
 epochs: 2
 loss: kl
-outer_lr: 1.0e-7
+outer_lr: 1.0e-6
 inner_lr: 5.0e-6
 n_edit_steps: 10
 cedit: 0.1
-cloc: 0.01
+cloc: 0.1
 learnable_lr: True
 lr_lr: 1.0e-07
 

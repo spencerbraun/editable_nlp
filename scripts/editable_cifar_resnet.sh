@@ -3,8 +3,12 @@
 #SBATCH --time=120:00:00 # Max job length is 5 days
 #SBATCH --nodes=1 # Only use one node (machine)
 #SBATCH --cpus-per-task=8 # Request 8 CPUs for this task
-#SBATCH --mem=32G # Request 64GB of memory
+#SBATCH --mem=32GB # Request 64GB of memory
 #SBATCH --gres=gpu:1 # Request one GPU
 
-source /iris/u/clin/code/editable_nlp/env/bin/activate
-python3 src/vision/train.py experiment=base_cifar_resnet
+script=$1
+
+source env/bin/activate
+echo "python3 src/vision/${script}.py experiment=editable_cifar_resnet"
+python3 src/vision/${script}.py experiment=editable_cifar_resnet
+

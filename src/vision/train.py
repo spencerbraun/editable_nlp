@@ -20,7 +20,7 @@ import hydra
 import wandb
 import utils
 from data_process import loadCIFAR, loadImageNet
-from evaluate import accuracy, get_logprobs
+from evaluate import accuracy, get_logprobs, editGenerator, performEdits
 
 eps = np.finfo(np.float32).eps.item()
 
@@ -36,8 +36,10 @@ class BaseTrainer:
             else f'{self.config.write_loc}/models'
         )
 
+        num_classes = len(train_set.classes)
+
         load_model = densenet169 if config.model == 'densenet169' else resnet18
-        self.model = utils.loadOTSModel(load_model, self.config.num_classes, self.config.pretrained)
+        self.model = utils.loadOTSModel(load_model, num_classes, self.config.pretrained)
         if not self.config.pretrained and not OmegaConf.is_missing(self.config, 'model_path'):
             model_path = os.path.join(self.config.write_loc, self.config.model_path)
             self.model.load_state_dict(torch.load(model_path))
@@ -59,8 +61,6 @@ class BaseTrainer:
 
         self.train_set = train_set
         self.val_set = val_set
-
-        self.configure_optimizers()
 
         if not self.config.debug:
             wandb.init(
@@ -92,9 +92,6 @@ class BaseTrainer:
                 f"Epoch: {self.epoch}; TrainStep {train_step}; ",
                 f"; ".join([f"{key} {val}" for key,val in kwargs.items()])
             ))
-
-    def getEditParams(self, model):
-        return model.parameters()
 
     def compute_base_loss(self, inputs, labels):
         if self.config.loss == 'cross_entropy':
@@ -176,8 +173,7 @@ class BaseTrainer:
         if not self.config.debug:
             torch.save(self.config, self.hyperspath)
 
-        self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config.outer_lr)
-        self.scheduler = None
+        self.configure_optimizers()
 
         self.model.train()
         self.global_iter = 0
@@ -202,7 +198,7 @@ class BaseTrainer:
                 if self.global_iter % 100 == 0:
                     self.val_step()
 
-                self.saveState(self.model, train_step, self.config.model)
+                self.saveState(self.model, self.global_iter, self.config.model)
                 self.global_iter += 1
 
             print('Epoch {} Train\tLoss: {:.2f}\tTop-1 acc: {:.2f}\tTop-5 acc: {:.2f}'.format(
@@ -220,12 +216,12 @@ class BaseTrainer:
             if self.scheduler:
                 self.scheduler.step()
 
-        self.saveState(self.model, 0, final=True)
+        self.saveState(self.model, self.global_iter, final=True)
         if self.config.learnable_lr:
             self.saveState(self.lrs, self.global_iter, final=True, name='lr')
     
     def configure_optimizers(self):
-        self.opt = torch.optim.Adam(self.getEditParams(self.model), lr=self.config.outer_lr)
+        self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config.outer_lr)
         self.scheduler = None
         self.lrs = None
         self.lr_opt = None
@@ -234,70 +230,13 @@ class BaseTrainer:
 class EditTrainer(BaseTrainer):
     def __init__(self, config, train_set, val_set, model_path=None):
         super().__init__(config, train_set, val_set)
-        self.train_edit_gen = self.editGenerator('train')
-        self.val_edit_gen = self.editGenerator('val')
-
-    def getEditParams(self, model):
         if self.config.model == 'resnet18':
-            return model.layer3.parameters()
-        else:
-            return model.features.denseblock3.parameters()
+            utils.prep_resnet_for_maml(self.model)
+        elif self.config.model == 'densenet169':
+            utils.prep_densenet_for_maml(self.model)
 
-    def editGenerator(self, ds='train'):
-        edit_dataset = self.train_set if ds == 'train' else self.val_set
-        sampler = RandomSampler(edit_dataset, replacement=True, num_samples=1)
-        while True:
-            for inputs, labels in DataLoader(edit_dataset, sampler=sampler, batch_size=1, num_workers=2):
-                inputs = inputs.to(self.device)
-                edit_labels = torch.randint_like(labels, self.config.num_classes, device=self.device)
-                yield inputs, edit_labels
-
-    def performEdits(self, model, edit_inputs, edit_labels):
-        lp_hist = []
-        l_edit, ll_change, edit_success = 0.0, 0.0, 0.0
-
-        model.eval()
-        lp_hist.append(get_logprobs(model, edit_inputs, edit_labels))
-
-        param_groups = [
-            {'params': p, 'lr': None} 
-            for p in self.getEditParams(model)
-        ]
-        inner_opt = (
-            torch.optim.SGD(param_groups) if self.config.learnable_lr
-            else torch.optim.SGD(
-                self.getEditParams(model),
-                lr=self.config.inner_lr
-            )
-        )
-
-        with torch.enable_grad():
-            with higher.innerloop_ctx(
-                model,
-                inner_opt,
-                override={'lr': self.lrs} if self.config.learnable_lr else None,
-                copy_initial_weights=False,
-                track_higher_grads=True
-            ) as (fmodel, diffopt):
-                for edit_step in range(self.config.n_edit_steps):
-                    fmodel.eval()  # needed for batchnorm to work properly on batch size of 1
-                    edit_logits = fmodel(edit_inputs)
-                    loss = F.cross_entropy(edit_logits, edit_labels)
-                    diffopt.step(loss)
-
-                    lp = get_logprobs(fmodel, edit_inputs, edit_labels)
-                    lp_hist.append(lp)
-
-        edit_logits = fmodel(edit_inputs)
-        l_edit = F.cross_entropy(edit_logits, edit_labels)
-        edit_success = np.mean(torch.eq(torch.argmax(edit_logits, -1), edit_labels).cpu().numpy())
-        ll_change = np.mean(abs(lp_hist[0]) - abs(lp_hist[-1]) / (abs(lp_hist[0]) + eps))
-
-        print("Log prob history:", ["{:.2f}".format(i) for i in lp_hist])
-        print("Edit step {}\tll change {:.2f}\tLog prob {:.2f}\tLoss {:.2f}".format(
-                edit_step, ll_change, lp_hist[-1], l_edit))
-
-        return fmodel, l_edit, lp_hist, ll_change, edit_success
+        self.train_edit_gen = editGenerator(train_set)
+        self.val_edit_gen = editGenerator(val_set)
 
     def train_step(self, inputs, labels):
         inputs = inputs.to(self.device)
@@ -316,10 +255,13 @@ class EditTrainer(BaseTrainer):
         l_base.backward()
         total_loss += l_base.item()
 
-        model_edited, l_edit, lp_hist, ll_change, edit_success = self.performEdits(
+        model_edited, l_edit, lp_hist, ll_change, edit_success = performEdits(
             self.model,
             edit_inputs,
-            edit_labels
+            edit_labels,
+            self.config.n_edit_steps,
+            self.lrs,
+            self.config.inner_lr
         )
 
         edited_base_logits = model_edited(inputs)
@@ -352,7 +294,7 @@ class EditTrainer(BaseTrainer):
                 'step': self.global_iter,
                 'loss/base': l_base,
                 'loss/edit': l_edit,
-                'loss/local': l_loc,
+                'loss/loc': l_loc,
                 'loss/train': total_loss,
                 'edit_success_train': edit_success,
                 'acc/top1_pre_train': acc1_pre,
@@ -394,10 +336,13 @@ class EditTrainer(BaseTrainer):
 
             for edit_num, (edit_inputs, edit_labels) in enumerate(list(itertools.islice(self.val_edit_gen, 10))):
                 
-                model_edited, l_edit, lp_hist, ll_change, edit_success = self.performEdits(
+                model_edited, l_edit, lp_hist, ll_change, edit_success = performEdits(
                     self.model,
                     edit_inputs,
                     edit_labels,
+                    self.config.n_edit_steps,
+                    self.lrs,
+                    self.config.inner_lr
                 )
                 ll_changes.append(ll_change)
                 edit_successes.append(edit_success)
@@ -441,12 +386,12 @@ class EditTrainer(BaseTrainer):
         super().configure_optimizers()
         self.lrs = [
             torch.nn.Parameter(torch.tensor(self.config.inner_lr)) 
-            for p in self.getEditParams(self.model)
+            for p in type(self.model).inner_params(self.model)
         ]
         self.lr_opt = torch.optim.SGD(self.lrs, lr=self.config.lr_lr)
 
 
-@hydra.main(config_path='config', config_name='config')
+@hydra.main(config_path='config/train', config_name='config')
 def main(config: DictConfig):
     print(OmegaConf.to_yaml(config))
 

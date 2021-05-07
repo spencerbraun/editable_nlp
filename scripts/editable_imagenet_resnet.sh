@@ -6,5 +6,9 @@
 #SBATCH --mem=32GB # Request 64GB of memory
 #SBATCH --gres=gpu:1 # Request one GPU
 
-source /iris/u/clin/code/editable_nlp/env/bin/activate
-python3 src/vision/train.py experiment=editable_imagenet_densenet
+script=$1
+
+source env/bin/activate
+echo "python3 src/vision/${script}.py experiment=editable_imagenet_resnet"
+python3 src/vision/${script}.py experiment=editable_imagenet_resnet
+

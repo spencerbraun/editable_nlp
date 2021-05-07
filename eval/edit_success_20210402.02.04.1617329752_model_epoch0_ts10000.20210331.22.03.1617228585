@@ -1,1 +1,0 @@
-train_step,n_edit_steps,success,success_diff,new_logits,orig_logits,new_ppl,orig_ppl,new_prob,old_prob

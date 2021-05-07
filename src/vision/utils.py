@@ -33,6 +33,28 @@ class AverageMeter(object):
         return fmtstr.format(**self.__dict__)
 
 
+def prep_resnet_for_maml(model, adapt_all: bool = False):
+    # Default inner loop adaptation parameters
+    def _inner_params(self):
+        if adapt_all:
+            return list(self.parameters())
+        else:
+            return list(self.layer3.parameters())
+
+    type(model).inner_params = _inner_params
+
+
+def prep_densenet_for_maml(model, adapt_all: bool = False):
+    # Default inner loop adaptation parameters
+    def _inner_params(self):
+        if adapt_all:
+            return list(self.parameters())
+        else:
+            return list(self.features.denseblock3.parameters())
+
+    type(model).inner_params = _inner_params
+
+
 def loadOTSModel(loadModel=models.resnet18, num_classes=1000, pretrained=True):
     model = loadModel(num_classes=num_classes, pretrained=pretrained)
     if pretrained:
