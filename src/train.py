@@ -52,7 +52,7 @@ class BaseTrainer:
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         if not self.config.debug:
             wandb.init(
-                project='patchable',
+                project='patchable' if self.model_name == 'gpt2' else 'patchable_masked',
                 entity='patchable-lm',
                 config=self.config,
                 name=f"{self.config.task}_{self.timestamp}",
@@ -148,6 +148,7 @@ class EditTrainer(BaseTrainer):
 
         self.model = utils.loadTrainedModel(
             f"{self.config.write_loc}/models/finetune/{self.config.ft_model_name}", 
+            name=self.model_name,
             cache_dir=self.config.write_loc,
             tokenizer=False
         )
@@ -192,9 +193,9 @@ class EditTrainer(BaseTrainer):
         model.to(DEVICE)
         model.eval()
         with torch.no_grad():
-            indices = [idx % len(data) for idx in range(self.val_iter, self.val_iter + 100)]  # select 100 elements
-            subset = Subset(data.dataset, indices)
-            for batch_idx, (lm_data, edit_example, _, _) in enumerate(subset):
+#             indices = [idx % len(data) for idx in range(self.val_iter, self.val_iter + 100)]  # select 100 elements
+#             subset = Subset(data.dataset, indices)
+            for batch_idx, (lm_data, edit_example, _, _) in enumerate(data):
                 lm_tokens, lm_mask = lm_data[0]
                 lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
                 lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
@@ -360,11 +361,13 @@ class SelfSampleTrainer(EditTrainer):
                 conv_predicate = lambda mod: (
                     isinstance(mod, transformers.models.gpt2.modeling_gpt2.Conv1D) and mod.weight.shape[1] == 768
                 )
+                ConditionalLinearWrapper.wrap_model(self.model, self.model.config.n_embd, -1, conv_predicate)
             elif self.model_name == 't5-small':
                 conv_predicate = lambda mod: (
                     isinstance(mod, transformers.models.t5.modeling_t5.T5DenseReluDense)
                 )
-            ConditionalLinearWrapper.wrap_model(self.model, self.model.config.n_embd, -1, conv_predicate)
+                ConditionalLinearWrapper.wrap_model(self.model, self.model.config.d_model, -1, conv_predicate)
+
         
     def genModelText(self, lm_tokens):
         
@@ -391,6 +394,7 @@ class SelfSampleTrainer(EditTrainer):
         edit_tokens, edit_mask = edit_tokens.to(self.device), edit_mask.to(self.device)
 
         return edit_tokens, edit_mask, edit_labels
+            
 
     def processMaskedLMData(self, masked_sentence, template, obj, edit_obj):
 
@@ -487,6 +491,7 @@ class SelfSampleTrainer(EditTrainer):
         self.model.eval()
 
         for ds in ['train', 'val']:
+
             data = self.validation_set if ds == 'val' else self.data
 
             ppl_pre_hist = []
@@ -496,11 +501,12 @@ class SelfSampleTrainer(EditTrainer):
 
             indices = [idx % len(data) for idx in range(self.val_iter, self.val_iter + 10)]  # select 10 elements
             subset = Subset(data.dataset, indices)
-            for batch_idx, (lm_data, edit_example, label1, label2) in enumerate(subset):
+            for batch_idx, (lm_data, edit_example, label1, label2) in enumerate(self.validation_set):
                 (lm_tokens, lm_mask, lm_labels, edit_tokens, 
                  edit_mask, edit_labels, edit_locs, gold_tokens) = self.processData(lm_data, edit_example, label1, label2)
 
                 with torch.no_grad():
+
                     orig_ppl = self.perplexity(self.model, data)
                 model_out, logit_hist, ll_change, loss = performOneEdit(
                     self.model,
@@ -528,7 +534,7 @@ class SelfSampleTrainer(EditTrainer):
             }
             self.wandb_log(self.val_iter * 100, metrics)
 
-        self.val_iter += 1
+            self.val_iter += 1
 
         self.model.train()
     
@@ -557,11 +563,12 @@ class SelfSampleTrainer(EditTrainer):
         lr_opt = torch.optim.Adam(self.lrs, lr=self.config.lr_lr)
 
         skip_count = 0
-
+        
         for epoch in range(self.config.epochs):
             self.epoch = epoch
-            
+
             for train_step, (lm_data, edit_example, label1, label2) in enumerate(self.data):
+
                 (lm_tokens, lm_mask, lm_labels, edit_tokens, 
                  edit_mask, edit_labels, edit_locs, gold_tokens) = self.processData(lm_data, edit_example, label1, label2)
 
@@ -593,6 +600,7 @@ class SelfSampleTrainer(EditTrainer):
                         for edit_step in range(self.config.n_edit_steps):
                             if self.config.split_params:
                                 fmodel.set_editing(True)
+
                             loss = fmodel(
                                 edit_tokens[edit_example_idx],
                                 attention_mask=edit_mask[edit_example_idx],
@@ -702,7 +710,7 @@ class SelfSampleTrainer(EditTrainer):
         self.saveState(self.model, global_iter, final=True, name="self_sample")
         if self.config.learnable_lr:
             self.saveState(self.lrs, global_iter, final=True, name='lr')
-
+            
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -729,7 +737,6 @@ if __name__ == "__main__":
     config.bs = args.bs
     config.n_edits = args.n_edits
     config.split_params = args.split_params
-    config.write_loc = loc
     config.debug = args.debug if args.debug else config.debug
 
     if (args.editable or args.self_sample):
@@ -757,7 +764,7 @@ if __name__ == "__main__":
             bs=args.bs,
             pct=30,
             shuffle=True,
-            max_valid_len=config.max_valid_len,
+            max_val_len=config.max_val_len,
             mode='editable'
         )
         train = dataloader.train

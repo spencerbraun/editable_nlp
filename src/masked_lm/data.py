@@ -2,6 +2,7 @@ import os
 import argparse
 import random
 import pickle
+import time
 from tqdm import tqdm
 
 import torch
@@ -26,36 +27,16 @@ class LAMADataset(torch.utils.data.Dataset):
         self.data_loc = data_loc
         self.pct = pct
         
-        if mode == 'finetune':
-            self.dataset = load_dataset(
-                'lama', 
-                'trex',
-                cache_dir=data_loc,
-                split=datasets.ReadInstruction('train', to=pct, unit='%'),
-                keep_in_memory=True
-            )
-            
-            if shuffle:
-                self.dataset = self.dataset.shuffle(seed=123)
-            if template_filter:
-                self.dataset = self.dataset.filter(
-                     lambda x: x['template'] in template_filter
-                )
-        else:
-            self.edit_location = f"{data_loc}/lama_edited_{self.pct}pct.pkl"
-            if os.path.exists(self.edit_location):
-                print(f"Reusing edited LAMA: {self.edit_location}")
-                with open(self.edit_location, "rb") as f:
-                    self.dataset = pickle.load(f)
-            else: 
-                gen = input(f"Edited LAMA not found ('{self.edit_location}'). Generate? (y/n) ")
-                if gen.lower() == 'y':
-                    print("Generating...")
-                    self.generateEdited(self.data_loc)
-
-                else:
-                    print("Exiting...")
-                    raise AttributeError
+        self.edit_location = f"{data_loc}/lama_edited_{self.pct}pct.pkl"
+        if os.path.exists(self.edit_location):
+            print(f"Reusing edited LAMA: {self.edit_location}")
+            with open(self.edit_location, "rb") as f:
+                self.dataset = pickle.load(f)
+        else: 
+            print(f"Edited LAMA not found ('{self.edit_location}'). Generating in 5s...")
+            time.sleep(5)
+            print("Generating...")
+            self.generateEdited(self.data_loc)
                 
         self.mode = mode
         
@@ -190,7 +171,7 @@ class MaskedLMDataloader:
         )
         
         return dataloader
-    
+        
     @property
     def train(self):
         return self.getDataloader(self.train_ds)

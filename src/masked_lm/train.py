@@ -1,20 +1,20 @@
-import os
 import argparse
-import glob
+import sys
 from datetime import datetime
 
 import numpy as np
 import torch
-import torch.nn.functional as F
-from torch.utils.data import Subset
 
 import transformers
 import higher
 import wandb
 
 import data
-import utils
 from config import TrainConfig
+
+sys.path.append('../')
+import utils
+
 
 
 class T5Trainer:
@@ -25,10 +25,10 @@ class T5Trainer:
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         self.model_dir = f'{self.config.write_loc}/models/finetune'
-        self.model, self.tokenizer = (
-            utils.loadT5Model(cache_dir=self.config.write_loc) if not model_path else 
-            utils.loadTrainedModel(model_path, cache_dir=self.config.write_loc)
-            )
+        self.model, self.tokenizer = utils.loadOTSModel(
+            name='t5-small',cache_dir=self.config.write_loc
+        )
+
         self.model.to(self.device)
         self.opt = torch.optim.Adam(
             self.model.parameters(), 
@@ -48,7 +48,7 @@ class T5Trainer:
 
         if not self.config.debug:
             wandb.init(
-                project='patchable',
+                project='patchable_masked',
                 entity='patchable-lm',
                 config=self.config,
                 name=f"{self.config.task}_{self.timestamp}",
@@ -61,7 +61,7 @@ class T5Trainer:
         self.train_iter = 0
         self.valid_iter = 0
 
-    def saveState(self, state_obj, train_step, name="T5_finetune", final=False):
+    def saveState(self, state_obj, step, name="T5_finetune", final=False):
         if not self.config.debug:
             out_obj = state_obj.state_dict() if hasattr(state_obj, "state_dict") else state_obj
             if final:
@@ -69,16 +69,16 @@ class T5Trainer:
                     out_obj, 
                     self.statepath(name, self.epoch, 9999)
                     )
-            elif (train_step > 0) & (train_step % self.config.model_save_pt == 0):
+            elif (step > 0) & (step % self.config.model_save_pt == 0):
                 torch.save(
                     out_obj, 
-                    self.statepath(name, self.epoch, train_step)
+                    self.statepath(name, self.epoch, step)
                     )
 
-    def echo(self, train_step, **kwargs):
+    def echo(self, step, **kwargs):
         if not self.config.silent:
             print((
-                    f"Epoch: {self.epoch}; TrainStep {train_step}; ",
+                    f"Epoch: {self.epoch}; Iter {step}; ",
                     f"; ".join([f"{key} {val}" for key,val in kwargs.items()])
                 )) 
 
@@ -88,7 +88,6 @@ class T5Trainer:
                 self.writer.add_scalar(key, value, step)
     
     def wandb_log(self, step, row):
-        row['step'] = step
         if not self.config.debug:
             wandb.log(row)
 
@@ -103,7 +102,9 @@ class T5Trainer:
             sent_toks, sent_mask = sent_toks.to(self.device), sent_mask.to(self.device)
             label_toks, label_mask = label_toks.to(self.device), label_mask.to(self.device)
 
-            
+            if sent_toks.shape[-1] > 500:
+                print(f"Sequence {train_step} too long: {sent_toks.shape[-1]}. Skipping...")
+                continue
             base_out = self.model(
                  sent_toks, 
                  attention_mask=sent_mask,
@@ -113,17 +114,20 @@ class T5Trainer:
             l_base = base_out.loss
             l_base.backward()
             
-            if (train_step % 5 == 0) & (train_step != 0):
+            if (self.train_iter % 5 == 0) & (self.train_iter != 0):
                 self.opt.step()
                 self.opt.zero_grad()
                 
-            if (train_step % 2000 == 0) & (train_step != 0):
+            if (self.train_iter % 2000 == 0) & (self.train_iter != 0):
                 self.valid_step()
             
             self.echo(self.train_iter, **{"loss/base": l_base})
             self.wandb_log(self.train_iter, {"loss/base": l_base})
             self.saveState(self.model, self.train_iter, "T5_finetune")
             self.train_iter += 1
+            
+            if self.train_iter > self.config.max_iter:
+                break
         
 
     def valid_step(self):
@@ -131,23 +135,30 @@ class T5Trainer:
         print("Validation Steps")
         self.model.eval()
         with torch.no_grad():
-            for train_step, noised_batch in enumerate(self.validation):
+            for valid_step, (sentence, label) in enumerate(self.validation):
                     
-                tokens, labels = noised_batch
-                tokens, labels = tokens.to(self.device), labels.to(self.device)
-                
+                sent_toks, sent_mask = sentence
+                label_toks, label_mask = label
+                sent_toks, sent_mask = sent_toks.to(self.device), sent_mask.to(self.device)
+                label_toks, label_mask = label_toks.to(self.device), label_mask.to(self.device)
+
+                if sent_toks.shape[-1] > 500:
+                    print(f"Sequence {valid_step} too long: {sent_toks.shape[-1]}. Skipping...")
+                    continue
+                    
                 base_out = self.model(
-                    tokens,
-                    labels=labels
+                 sent_toks, 
+                 attention_mask=sent_mask,
+                 labels=label_toks
                 )
+
                 l_base = base_out.loss
-                l_base.backward()
          
-            self.echo(self.valid_iter, **{"Val\tLoss:": l_base})
-            self.wandb_log(self.valid_iter, {
-                "loss/val_loss": l_base
-                })
-            self.valid_iter += 1
+                self.echo(self.valid_iter, **{"Val Loss:": l_base})
+                self.wandb_log(self.valid_iter, {"loss/val_loss": l_base})
+                self.valid_iter += 1
+
+        self.model.train()
                 
 
     def run(self):
@@ -176,9 +187,9 @@ if __name__ == "__main__":
         loc=loc,
         bs=args.bs,
         pct=30,
-        shuffle=False,
+        shuffle=True,
         mode='finetune',
-        max_valid_len=2000
+        max_val_len=2000
     )
     train = dl.train
     validation = dl.validation
