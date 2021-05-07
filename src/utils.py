@@ -2,12 +2,40 @@ import os
 import platform
 import zipfile
 from shutil import copyfile
+import math
 
 import glob
 import numpy as np
 import torch
+import transformers
 from transformers import GPT2Tokenizer, GPT2LMHeadModel, T5Tokenizer, T5ForConditionalGeneration
-from data_process import TorchDataset, WikitextDataset
+from data_process import TorchDataset, WikitextDataset, NTokenDataset
+
+from alg.senn_conditional import ConditionalLinearWrapper
+
+
+class NLLAccumulator(object):
+    def __init__(self):
+        self.n_total = 0
+        self.nll_sum = 0
+
+    def update(self, nll: float, n: int):
+        self.nll_sum += nll * n
+        self.n_total += n
+
+    def get_metrics(self):
+        avg = self.nll_sum / self.n_total
+        return avg, math.e ** avg
+
+    @staticmethod
+    def n_predictions_for_labels(labels):
+        if labels.dim() == 1:
+            return (labels[1:] != -100).sum().item()
+        elif labels.dim() == 2:
+            return (labels[:, 1:] != -100).sum().item()
+        else:
+            assert False
+
 
 
 
@@ -48,17 +76,8 @@ def loadTokenizer(name='gpt2', cache_dir=None):
 
     return tokenizer
 
-def retrieveEditDataloader(
-    tokenizer, 
-    bs=10, 
-    data_loc='..',
-    dataset='train', 
-    max_obs=float('inf'),
-    shuffle=False,
-    self_sample=False,
-    n_edits=1,
-):
 
+def _getFileIds(data_loc, self_sample, dataset, max_obs):
     data_path = f"{data_loc}/data/self_sample" if self_sample else f"{data_loc}/data"
     if self_sample:
         writtenFiles = (
@@ -75,8 +94,23 @@ def retrieveEditDataloader(
 
     fileIndex = max(map(lambda x: int(x.split(".")[-1]), writtenFiles))
     limitIndex = min(max_obs, fileIndex)
+
+    return list(range(limitIndex))
+
+
+def retrieveEditDataloader(
+    tokenizer, 
+    bs=10, 
+    data_loc='..',
+    dataset='train', 
+    max_obs=float('inf'),
+    shuffle=False,
+    self_sample=False,
+    n_edits=1,
+):
+
     ds = TorchDataset(
-        list(range(limitIndex)),
+        _getFileIds(data_loc, self_sample, dataset, max_obs),
         tokenizer,
         data_loc=data_loc,
         dataset=dataset,
@@ -92,6 +126,28 @@ def retrieveEditDataloader(
     )
 
     return dataloader
+
+
+def retrieveUnifiedDataset(
+    tokenizer, 
+    bs=10, 
+    data_loc='..',
+    dataset='train', 
+    max_obs=float('inf'),
+    shuffle=False,
+    self_sample=False,
+    n_edits=1,
+):
+    return NTokenDataset(
+        _getFileIds(data_loc, self_sample, dataset, max_obs),
+        tokenizer,
+        data_loc=data_loc,
+        dataset=dataset,
+        self_sample=self_sample,
+        batch_size=bs,
+        n_edits=n_edits
+    )
+
 
 def wikiDataloader(
     tokenizer, 
@@ -136,13 +192,46 @@ def wikiDataloader(
     return dataloader
 
 
-def loadTrainedModel(modelPath, name='gpt2', cache_dir=None, tokenizer=True):
-    model, tok = loadOTSModel(name, cache_dir=cache_dir)
+def split_conv_layers(model, name):
+    # find Conv1D layers to replace (they annoyingly have transposed weights)
+    if name == 'gpt2':
+        conv_predicate = lambda mod: (
+            isinstance(mod, transformers.models.gpt2.modeling_gpt2.Conv1D) and mod.weight.shape[1] == 768
+        )
+        ConditionalLinearWrapper.wrap_model(self.model, self.model.config.n_embd, -1, conv_predicate)
+    elif name == 't5-small':
+        conv_predicate = lambda mod: (
+            isinstance(mod, transformers.models.t5.modeling_t5.T5DenseReluDense)
+        )
+        ConditionalLinearWrapper.wrap_model(self.model, self.model.config.d_model, -1, conv_predicate)
+
+def prep_for_maml(model, adapt_all: bool = False):
+    # Default inner loop adaptation parameters
+    def _inner_params(self):
+        if hasattr(self, 'transformer'):
+             if adapt_all:
+                return list(self.transformer.h.parameters())
+            else:
+                return list(self.transformer.h[-3:].parameters())
+        else:
+            return (list(self.encoder.block[-2:].parameters()) + 
+                    list(self.decoder.block[-2:].parameters()))
+       
+    type(model).inner_params = _inner_params
+
+
+def loadTrainedModel(modelPath, name='gpt2', cache_dir=None, tokenizer=True, split_params: bool = False, adapt_all: bool = False):
+    model, tok = loadOTSModel(cache_dir=cache_dir)
+    prep_for_maml(model, adapt_all)
+    if split_params:
+        split_conv_layers(model)
+        
     model.load_state_dict(torch.load(modelPath))
     model.eval()
     if not tokenizer:
         return model
     return model, tok
+
 
 def locateSubset(whole, subset):
     whole = whole.flatten().cpu().numpy()

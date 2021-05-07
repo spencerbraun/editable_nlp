@@ -2,31 +2,18 @@ import torch
 import torch.nn as nn
 from typing import Callable, List
 
+
 def filter_inner_params(params: List[nn.Parameter]):
     return [p for p in params if not hasattr(p, "__conditioner__")]
-
-
-class ConditionalLinear(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-
-        self.weight = nn.Parameter(torch.eye(dim))
-        self.weight.__conditioner__ = True
-
-    def set_active(self, active: bool):
-        self.active = active
-
-    def forward(self, x):
-        if self.active:
-            return x @ self.weight
-        else:
-            return x
 
 
 class ConditionalLinearWrapper(nn.Module):
     @staticmethod
     def wrap_model(
-        model: nn.Module, n_hidden: int, dim: int, predicate: Callable[[nn.Module], bool]
+        model: nn.Module,
+        n_hidden: int,
+        dim: int,
+        predicate: Callable[[nn.Module], bool],
     ):
         def _recursive_apply(module: nn.Module):
             n_wrapped = 0
@@ -65,18 +52,19 @@ class ConditionalLinearWrapper(nn.Module):
         # If this model already has `inner_params` defined, hot-swap this function to
         #  ensure it doesn't return any conditioning parameters
         if hasattr(model, "inner_params"):
-            def _constructor(old_inner_params):
-                def _senn_inner_params(self):
-                    return filter_inner_params(old_inner_params())
-                return _senn_inner_params
-            _inner_params = _constructor(model.inner_params)
+            print("Overriding existing `inner_params` implementation")
+            type(model).default_inner_params = type(model).inner_params
+            type(model).inner_params = lambda self: filter_inner_params(
+                self.default_inner_params()
+            )
         else:
-            def _inner_params(self):
-                return self.theta()
+            print("Injecting defaulting `inner_params` implementation -> `self.theta`")
+            type(model).default_inner_params = model.theta.__func__
+            type(model).inner_params = model.theta.__func__
 
-        # Add this specifically to this instance
-        model.inner_params = _inner_params.__get__(model)
-        
+        print(f"n default inner params: {len(model.default_inner_params())}")
+        print(f"n inner params: {len(model.inner_params())}")
+
         return model
 
     def __init__(self, module: nn.Module, size: int, dim: int = -1):
@@ -87,6 +75,17 @@ class ConditionalLinearWrapper(nn.Module):
         self.weight.__conditioner__ = True
         self.active = False
         self.dim = dim
+
+        def __deepcopy__(self, memo=None):
+            new_data = torch.empty_like(self.data)
+            new_data[:] = self.data.clone()
+            new_param = nn.Parameter(new_data)
+            if hasattr(self, "__conditioner__"):
+                new_param.__conditioner__ = True
+            new_param.__deepcopy__ = __deepcopy__.__get__(new_param)
+            return new_param
+
+        self.weight.__deepcopy__ = __deepcopy__.__get__(self.weight)
 
     def set_active(self, active: bool):
         self.active = active
@@ -101,3 +100,50 @@ class ConditionalLinearWrapper(nn.Module):
             )
 
         return out
+
+
+def _test_copy(model):
+    import copy
+
+    print("default", len(model.default_inner_params()))
+    print("inner", len(model.inner_params()))
+    modelcopy = copy.deepcopy(model)
+    print("copied")
+    print("default", len(modelcopy.default_inner_params()))
+    print("inner", len(modelcopy.inner_params()))
+    if id(modelcopy.inner_params()[0].data) != id(model.inner_params()[0].data):
+        print("FAIL")
+    else:
+        print("SUCCESS")
+
+
+if __name__ == "__main__":
+    import transformers
+    import utils
+
+    model = transformers.GPT2LMHeadModel.from_pretrained("distilgpt2")
+    tok = transformers.GPT2Tokenizer.from_pretrained("distilgpt2")
+    utils.prep_for_maml(model)
+    conv_predicate = lambda mod: (
+        isinstance(mod, transformers.models.gpt2.modeling_gpt2.Conv1D)
+        and mod.weight.shape[1] == 768
+    )
+    ConditionalLinearWrapper.wrap_model(model, model.config.n_embd, -1, conv_predicate)
+
+    input_ids = tok("This is a test sequence", return_tensors="pt")["input_ids"]
+
+    grads1 = torch.autograd.grad(
+        model(input_ids, labels=input_ids).loss, model.phi(), allow_unused=True
+    )
+    model.set_editing(True)
+    print("editing ON")
+    grads2 = torch.autograd.grad(model(input_ids, labels=input_ids).loss, model.phi())
+    model.set_editing(False)
+    print("editing OFF")
+    grads3 = torch.autograd.grad(
+        model(input_ids, labels=input_ids).loss, model.phi(), allow_unused=True
+    )
+
+    import pdb
+
+    pdb.set_trace()

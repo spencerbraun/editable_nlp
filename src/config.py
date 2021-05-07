@@ -39,8 +39,8 @@ class SelfSampleGPT2Config:
         self.epochs = 1
         self.max_iter = 20000
         self.n_edit_steps = 1
-        self.cedit = 0.5
-        self.cloc = 1
+        self.cedit = 1
+        self.cloc = 100
         self.learnable_lr = True
         self.lr_lr = 1e-3
 
