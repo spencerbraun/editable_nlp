@@ -5,6 +5,7 @@ import pickle
 import time
 from tqdm import tqdm
 
+import numpy as np
 import torch
 import datasets
 from datasets import load_dataset
@@ -17,18 +18,24 @@ import utils
 class LAMADataset(torch.utils.data.IterableDataset):
     def __init__(
         self, 
+        tokenizer,
         data_loc=".", 
+        n_edits=1,
         template_filter=None,
         pct=100,
         shuffle=False,
         seed=123,
         mode='finetune',
-        inner_loop='template'
+        inner_loop='template',
+        batch_size=1
     ):
         self.data_loc = data_loc
         self.pct = pct
         self.inner_loop = inner_loop
         self.mode = mode
+        self.n_edits = n_edits
+        self.batch_size = batch_size
+        self.tokenizer = tokenizer
         
         self.edit_location = f"{data_loc}/lama_edited_{self.pct}pct.pkl"
         if os.path.exists(self.edit_location):
@@ -40,6 +47,8 @@ class LAMADataset(torch.utils.data.IterableDataset):
             time.sleep(5)
             print("Generating...")
             self.generateEdited(self.data_loc)
+            
+        self.list_IDs = list(range(len(self.dataset['masked_sentence'])))
                 
 
     def tokenize(self, text):
@@ -109,8 +118,8 @@ class LAMADataset(torch.utils.data.IterableDataset):
     def __getitem__(self, index):
         rng = np.random.default_rng(index)
         edit_idxs = rng.choice(self.list_IDs, self.n_edits, replace=False)
-        loc_idxs = rng.choice(len(self.wiki), self.n_edits, replace=False)
-        base_idxs = rng.choice(len(self.wiki), self.batch_size, replace=False)
+        loc_idxs = rng.choice(self.list_IDs, self.n_edits, replace=False)
+        base_idxs = rng.choice(self.list_IDs, self.batch_size, replace=False)
         
         original_sent, edited_sent = [], []
         original_label, edited_label= [], []
@@ -170,28 +179,32 @@ class LAMADataset(torch.utils.data.IterableDataset):
 
 
 class MaskedLMDataloader:
-    def __init__(self, dataset, loc, mode, train_pct=80, **kwargs):
+    def __init__(self, dataset, tokenizer, loc, mode, train_pct=80, **kwargs):
         """
         mode in [finetune, editable]
         kwargs:
             bs: int
             pct: int
-            shuffle: bool
             train_pct: int
             max_val_len: int
+            n_edits: int
         """
         
         self.kwargs = kwargs
         self.mode = mode
+        self.tokenizer = tokenizer
         
         if dataset.lower() == 'lama':
             self.dataset = LAMADataset(
+                tokenizer,
                 data_loc=f"{loc}/hf", 
                 template_filter=self.kwargs.get('template_filter'),
                 pct=self.kwargs.get('pct', 100),
                 shuffle=self.kwargs.get('shuffle', False),
                 seed=123,
-                mode=self.mode
+                mode=self.mode,
+                batch_size=self.kwargs.get('bs', 1),
+                n_edits = self.kwargs.get('n_edits', 1)
             )
         
         self.valid_len = int(min(

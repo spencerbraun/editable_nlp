@@ -198,18 +198,18 @@ def split_conv_layers(model, name):
         conv_predicate = lambda mod: (
             isinstance(mod, transformers.models.gpt2.modeling_gpt2.Conv1D) and mod.weight.shape[1] == 768
         )
-        ConditionalLinearWrapper.wrap_model(self.model, self.model.config.n_embd, -1, conv_predicate)
+        ConditionalLinearWrapper.wrap_model(model, model.config.n_embd, -1, conv_predicate)
     elif name == 't5-small':
         conv_predicate = lambda mod: (
             isinstance(mod, transformers.models.t5.modeling_t5.T5DenseReluDense)
         )
-        ConditionalLinearWrapper.wrap_model(self.model, self.model.config.d_model, -1, conv_predicate)
+        ConditionalLinearWrapper.wrap_model(model, model.config.d_model, -1, conv_predicate)
 
 def prep_for_maml(model, adapt_all: bool = False):
     # Default inner loop adaptation parameters
     def _inner_params(self):
         if hasattr(self, 'transformer'):
-             if adapt_all:
+            if adapt_all:
                 return list(self.transformer.h.parameters())
             else:
                 return list(self.transformer.h[-3:].parameters())
@@ -228,7 +228,7 @@ def loadTrainedModel(
     split_params: bool = False, 
     adapt_all: bool = False
     ):
-    model, tok = loadOTSModel(cache_dir=cache_dir)
+    model, tok = loadOTSModel(name=name, cache_dir=cache_dir)
     prep_for_maml(model, adapt_all)
     if split_params:
         split_conv_layers(model)

@@ -41,11 +41,24 @@ def perplexity(model, dataloader):
     avg_loss, ppl = acc.get_metrics()
     return torch.tensor(ppl)
 
-def getIndexedProbs(model, index, gold_tokens, sent_tokens):
+def getIndexedProbs(model, index, gold_tokens, sent_tokens, labels):
 
     model.eval()
     with torch.no_grad():
         output = model(sent_tokens)
+        output_lps = F.log_softmax(output.logits, dim=-1)
+        logits = output_lps[:,index,:].detach().cpu().squeeze(0) #squeeze batch size
+        
+        gold_tokens = gold_tokens.flatten().unsqueeze_(1)
+        logit_sum = torch.sum(logits.gather(1, gold_tokens))
+
+    return logit_sum
+
+def getT5IndexedProbs(model, index, gold_tokens, sent_tokens, labels):
+
+    model.eval()
+    with torch.no_grad():
+        output = model(input_ids=sent_tokens, labels=labels.squeeze(0))
         output_lps = F.log_softmax(output.logits, dim=-1)
         logits = output_lps[:,index,:].detach().cpu().squeeze(0) #squeeze batch size
         
@@ -94,17 +107,24 @@ def performOneEdit(
 
     if model_name == 'gpt2':
         edit_tokens, edit_mask, edit_labels = edit_package
+        idxProbs = getIndexedProbs
     elif model_name == 't5-small':
         (
             edit_tokens, edit_mask, edit_labels,
             edit_template, edit_temp_mask, edit_labels
             ) = edit_package
-            edit_template[edit_template==32099] = gold_tokens
+
+#         edit_list = edit_template.squeeze().cpu().tolist()
+#         edit_pre = edit_list[:edit_list.index(32099)]
+#         edit_post = edit_list[(edit_list.index(32099) + 1):]
+#         edit_template = torch.tensor(edit_pre + gold_tokens.tolist() + edit_post).unsqueeze(0).cuda()
+        idxProbs = getT5IndexedProbs
     
     logit_hist = []
     logit_hist.append(
-        getIndexedProbs(model, edit_locs, gold_tokens, 
-        edit_tokens if model_name == 'gpt2' else edit_template)
+        idxProbs(model, edit_locs, gold_tokens, 
+        edit_tokens if model_name == 'gpt2' else edit_template,
+        None if model_name == 'gpt2' else edit_labels),
     )
     with higher.innerloop_ctx(
         model, 
@@ -128,8 +148,9 @@ def performOneEdit(
             diffopt.step(output.loss)
 
             logit_hist.append(
-                getIndexedProbs(fmodel, edit_locs, gold_tokens, 
-                edit_tokens if model_name == 'gpt2' else edit_template)
+                idxProbs(fmodel, edit_locs, gold_tokens, 
+                edit_tokens if model_name == 'gpt2' else edit_template,
+                None if model_name == 'gpt2' else edit_labels),
             )
 
             ll_change = (abs(logit_hist[0]) - abs(logit_hist[-1]))/abs(logit_hist[0])

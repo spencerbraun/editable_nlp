@@ -430,25 +430,29 @@ class SelfSampleTrainer(EditTrainer):
         acc = utils.NLLAccumulator()
         with torch.no_grad():
             for batch_idx, batch in enumerate(dataset):
-                lm_tokens, lm_mask, lm_labels = self.mask_padding(batch[0], batch[1])
+                lm_tokens, lm_mask, lm_labels = self.mask_padding(batch[0], batch[1], 
+                                                                  batch[2] if self.model_name == 't5-small' else None)
                 loss = model(lm_tokens, labels=lm_labels).loss
                 acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels))
 
         avg_nll, ppl = acc.get_metrics()
         return torch.tensor(ppl)
 
-    def mask_padding(self, tokens, mask, label):
+    def mask_padding(self, tokens, mask, label=None):
         if self.model_name == 'gpt2':
             return tokens.to(self.device), mask.to(self.device), tokens.masked_fill(mask == 0, -100).to(self.device)
         elif self.model_name == 't5-small':
             return (tokens.to(self.device), mask.to(self.device), 
-            tokens.masked_fill(label == self.tokenizer.pad_token_id, -100).to(self.device))
+            label.masked_fill(label == self.tokenizer.pad_token_id, -100).to(self.device))
 
     def strip_padding(self, tokens, mask, labels):
         mask_ = tokens != self.tokenizer.pad_token_id
         tokens = tokens[mask_].unsqueeze(0)
         mask = mask[mask_].unsqueeze(0)
-        labels = labels[mask_].unsqueeze(0)
+        if mask_.shape == labels.shape:
+            labels = labels[mask_].unsqueeze(0)
+        else: 
+            labels = labels.unsqueeze(0)
 
         return tokens.to(self.device), mask.to(self.device), labels.to(self.device)
 
@@ -460,11 +464,14 @@ class SelfSampleTrainer(EditTrainer):
         return edit_locs, gold_tokens.cpu()
 
     def get_t5_edit_locs(self, tokens, labels):
-        edit_label = edit_label[:, edit_lab_mask.flatten() == 1]
-        idx = np.setxor1d(list(range(edit_label.shape[1])), find(edit_label, special_obj)[1])
-        gold_tokens = edit_label[:,idx]
+        find = lambda tensor, v: torch.where(tensor[..., None] == v)
+        special_obj  = torch.tensor([32099, 32098, 1])
+
+        labels = labels.flatten().unsqueeze(0)
+        idx = np.setxor1d(list(range(labels.cpu().shape[1])), find(labels.cpu(), special_obj)[1])
+        gold_tokens = labels[:,idx]
         
-        edit_start = utils.locateSubset(edit_tokens, torch.tensor([32099]))
+        edit_start = utils.locateSubset(tokens, torch.tensor([32099]))
         edit_locs = torch.tensor([edit_start + i for i in range(gold_tokens.flatten().size()[0])])
 
         return edit_locs, gold_tokens.cpu()
@@ -491,13 +498,12 @@ class SelfSampleTrainer(EditTrainer):
                     (
                         _, _, _,
                         _, _, _,
-                        edit_tokens, edit_mask, edit_labels
+                        edit_tokens, edit_mask, edit_labels,
                         edit_template, edit_temp_mask, edit_labels
                     ) = datapack
                     edit_template = edit_template[:1]
                     edit_temp_mask = edit_temp_mask[:1]
-                    edit_labels = edit_labels[:1]
-                    edit_template, edit_temp_mask, edit_labels = self.strip_padding(edit_tokens, edit_mask, edit_labels)
+                    edit_template, edit_temp_mask, _ = self.strip_padding(edit_tokens, edit_mask, edit_labels)
                     
                 
                 edit_tokens = edit_tokens[:1]
@@ -507,16 +513,21 @@ class SelfSampleTrainer(EditTrainer):
                 edit_locs, gold_tokens = self.get_edit_locs(edit_tokens, edit_labels)
 
                 if self.model_name == 'gpt2':
+                    edit_locs, gold_tokens = self.get_edit_locs(edit_tokens, edit_labels)
                     edit_package = (edit_tokens, edit_mask, edit_labels)
                 elif self.model_name == 't5-small':
+                    edit_locs, gold_tokens = self.get_t5_edit_locs(edit_tokens, edit_labels)
                     edit_package = (edit_tokens, edit_mask, edit_labels, edit_template, edit_temp_mask, edit_labels)
 
                 start = time.time()
+
                 with torch.no_grad():
                     orig_ppl = self.perplexity(self.model, subset)
                 print(ds, batch_idx, time.time() - start)
+
                 model_out, logit_hist, ll_change, loss = performOneEdit(
                     self.model,
+                    self.model_name,
                     self.lrs,
                     edit_package,
                     edit_locs - 1, 
@@ -575,7 +586,7 @@ class SelfSampleTrainer(EditTrainer):
                     (
                         lm_tokens, lm_mask, lm_labels,
                         loc_tokens, loc_mask, loc_labels, 
-                        edit_tokens, edit_mask, edit_labels
+                        edit_tokens, edit_mask, edit_labels,
                         edit_template, edit_temp_mask, edit_labels
                     ) = datapack
                     lm_tokens, lm_mask, lm_labels = self.mask_padding(lm_tokens, lm_mask, lm_labels)
@@ -725,7 +736,7 @@ class SelfSampleTrainer(EditTrainer):
                         lr_opt.step()
                         lr_opt.zero_grad()
             
-                if (train_step % self.config.val_interval == 0) and (not self.config.debug):
+                if (train_step % self.config.val_interval == 0): #and (not self.config.debug):
                     self.validateSelfSampleTraining()
         
         self.saveState(self.model, global_iter, final=True, name="self_sample")
@@ -747,7 +758,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     loc = utils.sailPreprocess()
-    tokenizer = utils.loadTokenizer(cache_dir=loc)
+    tokenizer = utils.loadTokenizer(
+        name= 'gpt2' if not args.self_sample_masked else 't5-small',
+        cache_dir=loc)
     
     config = (
         TrainConfig() if args.finetune else
@@ -760,19 +773,19 @@ if __name__ == "__main__":
     config.n_edits = args.n_edits
     config.split_params = args.split_params
     config.debug = args.debug if args.debug else config.debug
-    config.val_interval = argss.val_interval
+    config.val_interval = args.val_interval
 
     if (args.editable or args.self_sample):
         train = utils.retrieveUnifiedDataset(
-            self.tokenizer,
-            data_loc=self.config.write_loc,
+            tokenizer,
+            data_loc=config.write_loc,
             bs=1,
             dataset='train',
             self_sample=True
         )
         validation = utils.retrieveUnifiedDataset(
-            self.tokenizer,
-            data_loc=self.config.write_loc,
+            tokenizer,
+            data_loc=config.write_loc,
             bs=1,
             dataset='validation',
             self_sample=True
@@ -797,6 +810,7 @@ if __name__ == "__main__":
     elif args.self_sample_masked:
         dataloader = MaskedLMDataloader(
             'lama',
+            tokenizer,
             loc=loc,
             bs=args.bs,
             pct=30,

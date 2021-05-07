@@ -141,7 +141,7 @@ class NTokenDataset(torch.utils.data.IterableDataset):
         self.loc = data_loc
         self.self_sample = self_sample
         self.n_edits = n_edits
-        self.wiki = WikitextDataset("/scr/em7", dataset=dataset, filter_=False)
+        self.wiki = WikitextDataset(f"{data_loc}/hf", dataset=dataset, filter_=False)
         self.batch_size = batch_size
         self.n_edit_tokens = n_edit_tokens
 
