@@ -38,7 +38,7 @@ def perplexity(model, dataloader):
             loss = model(lm_tokens, labels=lm_labels).loss
             acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels))
 
-    avg_loss, ppl = acc.get_metric()
+    avg_loss, ppl = acc.get_metrics()
     return torch.tensor(ppl)
 
 def getIndexedProbs(model, index, gold_tokens, sent_tokens):
@@ -335,6 +335,7 @@ def evalSelfSample(
             n_edits +=1 
             if n_edits >= (5 * seq_edits):
                 break
+        print(f"Saved results to {saveloc}")
     if copy_to:
         shutil.copyfile(saveloc, f"{copy_to}/{filename}")
 
