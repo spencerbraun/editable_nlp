@@ -73,10 +73,9 @@ def loadLr(model_path):
 
 def performOneEdit(
     model, 
+    model_name,
     lrs,
-    edit_tokens,
-    edit_mask,
-    edit_labels,
+    edit_package,
     edit_locs, 
     gold_tokens,
     n_edit_steps=10
@@ -92,10 +91,20 @@ def performOneEdit(
         for p in model.inner_params()
     ]
     inner_opt = (torch.optim.SGD(param_groups))
+
+    if model_name == 'gpt2':
+        edit_tokens, edit_mask, edit_labels = edit_package
+    elif model_name == 't5-small':
+        (
+            edit_tokens, edit_mask, edit_labels,
+            edit_template, edit_temp_mask, edit_labels
+            ) = edit_package
+            edit_template[edit_template==32099] = gold_tokens
     
     logit_hist = []
     logit_hist.append(
-        getIndexedProbs(model, edit_locs, gold_tokens, edit_tokens)
+        getIndexedProbs(model, edit_locs, gold_tokens, 
+        edit_tokens if model_name == 'gpt2' else edit_template)
     )
     with higher.innerloop_ctx(
         model, 
@@ -119,7 +128,8 @@ def performOneEdit(
             diffopt.step(output.loss)
 
             logit_hist.append(
-                getIndexedProbs(fmodel, edit_locs, gold_tokens, edit_tokens)
+                getIndexedProbs(fmodel, edit_locs, gold_tokens, 
+                edit_tokens if model_name == 'gpt2' else edit_template)
             )
 
             ll_change = (abs(logit_hist[0]) - abs(logit_hist[-1]))/abs(logit_hist[0])

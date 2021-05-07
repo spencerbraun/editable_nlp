@@ -220,7 +220,14 @@ def prep_for_maml(model, adapt_all: bool = False):
     type(model).inner_params = _inner_params
 
 
-def loadTrainedModel(modelPath, name='gpt2', cache_dir=None, tokenizer=True, split_params: bool = False, adapt_all: bool = False):
+def loadTrainedModel(
+    modelPath, 
+    name='gpt2', 
+    cache_dir=None, 
+    tokenizer=True, 
+    split_params: bool = False, 
+    adapt_all: bool = False
+    ):
     model, tok = loadOTSModel(cache_dir=cache_dir)
     prep_for_maml(model, adapt_all)
     if split_params:
