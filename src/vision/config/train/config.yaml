@@ -1,3 +1,5 @@
 debug: False
+model_save_pt: 1000
+silent: False
 defaults:
   - experiment: base_cifar_resnet

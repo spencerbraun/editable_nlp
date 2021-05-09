@@ -8,15 +8,14 @@ dataset: cifar10
 num_classes: 10
 bs: 128
 
-epochs: 10
+epochs: 25
 loss: cross_entropy
-outer_lr: 1.0e-4
-inner_lr: 5.0e-5
-n_edit_steps: 10
-cedit: 1
-cloc: 0.1
+outer_lr: 1.0e-4 # 5.0e-5
+inner_lr: 1.0e-3 # 1.0e-5
+n_edit_steps: 5
+n_edits: 16
+cedit: 0.1
+cloc: 1
 learnable_lr: True
-lr_lr: 1.0e-5
+lr_lr: 1.0e-3
 
-model_save_pt: 1000
-silent: False

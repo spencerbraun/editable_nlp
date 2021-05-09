@@ -12,6 +12,4 @@ loss: cross_entropy
 outer_lr: 0.001
 epochs: 200
 
-model_save_pt: 1000
-silent: False
 learnable_lr: False

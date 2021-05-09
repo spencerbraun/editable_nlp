@@ -33,7 +33,7 @@ def accuracy(output, target, topk=(1,)):
         maxk = max(topk)
         batch_size = target.size(0)
 
-        _, pred = output.topk(maxk, 1, True, True)
+        _, pred = output.topk(k=maxk, dim=1, largest=True, sorted=True)
         pred = pred.t()
         correct = pred.eq(target.view(1, -1).expand_as(pred))
 
@@ -48,8 +48,8 @@ def get_logprobs(model, inputs, labels):
     with torch.no_grad():
         base_logits = model(inputs)
         base_lps = F.log_softmax(base_logits, dim=-1).detach().cpu()
-    
-    return base_lps[:, labels].item()
+
+    return base_lps[range(labels.shape[0]), labels]
 
 
 def loadLr(model_path):
@@ -57,7 +57,7 @@ def loadLr(model_path):
     model_id = model_name.split(".")[-1]
     step = model_name.split("_")[-1].split(".")[0]
     dir_loc = os.path.dirname(model_path)
-    lr_glob = glob.glob(f"{dir_loc}/lr_epoch0_{step}.*{model_id}")
+    lr_glob = glob.glob(f"{dir_loc}/lr_epoch[0-9]*_{step}.*{model_id}")
 
     if len(lr_glob) > 1:
         raise AttributeError("Too many lr specifications", ",".join(lr_glob))
@@ -70,23 +70,22 @@ def loadLr(model_path):
     return lrs
 
 
-def editGenerator(dataset):
-    num_classes = len(dataset.dataset.classes) if type(dataset) == torch.utils.data.Subset else dataset.classes
-    sampler = RandomSampler(dataset, replacement=True, num_samples=1)
-    while True:
-        for inputs, labels in DataLoader(dataset, sampler=sampler, batch_size=1, num_workers=2):
-            inputs = inputs.to(DEVICE)
-            edit_labels = torch.randint_like(labels, num_classes, device=DEVICE)
-            yield inputs, edit_labels
-
-
 def repeater(dataloader):
     for loader in itertools.repeat(dataloader):
         for inputs, labels in dataloader:
             yield inputs, labels
 
 
-def performEdits(model, edit_inputs, edit_labels, n_edit_steps=1, lrs=None, default_lr=1e-5):
+def editGenerator(dataset, batch_size=1):
+    num_classes = len(dataset.dataset.classes) if type(dataset) == torch.utils.data.Subset else dataset.classes
+    sampler = RandomSampler(dataset)
+    while True:
+        for inputs, labels in repeater(DataLoader(dataset, sampler=sampler, batch_size=batch_size, num_workers=2)):
+            edit_labels = torch.randint_like(labels, num_classes)
+            yield inputs, edit_labels
+
+
+def performEdits(model, edit_inputs, edit_labels, n_edit_steps=1, lrs=None, default_lr=1e-5, mode="train"):
     lp_hist = []
     l_edit, ll_change, edit_success = 0.0, 0.0, 0.0
 
@@ -111,7 +110,7 @@ def performEdits(model, edit_inputs, edit_labels, n_edit_steps=1, lrs=None, defa
             inner_opt,
             override={'lr': lrs} if lrs else None,
             copy_initial_weights=False,
-            track_higher_grads=True
+            track_higher_grads=(mode == "train")
         ) as (fmodel, diffopt):
             for edit_step in range(n_edit_steps):
                 fmodel.eval()  # needed for batchnorm to work properly on batch size of 1
@@ -124,25 +123,40 @@ def performEdits(model, edit_inputs, edit_labels, n_edit_steps=1, lrs=None, defa
 
     edit_logits = fmodel(edit_inputs)
     l_edit = F.cross_entropy(edit_logits, edit_labels)
-    edit_success = np.mean(torch.eq(torch.argmax(edit_logits, -1), edit_labels).cpu().numpy()) * 100.0
-    ll_change = np.mean((abs(lp_hist[0]) - abs(lp_hist[-1])) / (abs(lp_hist[0]) + eps))
-
-    print("Log prob history:", ["{:.2f}".format(i) for i in lp_hist])
-    print("Edit step {}\tll change {:.2f}\tLog prob {:.2f}\tLoss {:.2f}".format(
-            edit_step, ll_change, lp_hist[-1], l_edit))
+    edit_success = (torch.argmax(edit_logits, -1) == edit_labels).float().mean().item() * 100.0
+    ll_change = ((abs(lp_hist[0]) - abs(lp_hist[-1])) / (abs(lp_hist[0]) + eps))
+    
+    print("Mean log prob history:", ["{:.2f}".format(i.mean().item()) for i in lp_hist])
+    print("Edit step {}\tMean ll change {:.2f}\tMean log prob {:.2f}\tLoss {:.2f}".format(
+            edit_step, ll_change.mean().item(), lp_hist[-1].mean().item(), l_edit))
 
     edited_model = copy.deepcopy(model)
     edited_model.load_state_dict(fmodel.state_dict())
 
     return edited_model, l_edit, lp_hist, ll_change, edit_success
 
+def evaluateOnDataset(model, dataset):
+    dataloader = DataLoader(dataset, batch_size=100, shuffle=True, num_workers=2)
+
+    top1 = utils.AverageMeter('Acc@1', ':6.2f')
+    top5 = utils.AverageMeter('Acc@5', ':6.2f')
+
+    for inputs, labels in dataloader:
+        inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
+
+        logits = model(inputs)
+        acc1, acc5 = accuracy(logits, labels, topk=(1,5))
+        top1.update(acc1, inputs.shape[0])
+        top5.update(acc5, inputs.shape[0])
+    
+    return top1.avg, top5.avg
+
 
 def evalEditable(
     model,
     dataset,
     model_name,
-    n_edit_steps,
-    seq_edits=1,
+    config,
     loc='../..'
 ):
 
@@ -153,10 +167,11 @@ def evalEditable(
     n_edits = 0
     edit_number = 0
     model_number = 0
-    sequential = seq_edits > 1
+    sequential = config.seq_edits > 1
     
     model.to(DEVICE)
-    model_edited = copy.deepcopy(model)
+    original_model = copy.deepcopy(model)
+    orig_params = get_params(original_model)
 
     try:
         lrs = loadLr(model_name)
@@ -164,91 +179,85 @@ def evalEditable(
         lrs = []
 
     try:
-        n_edit_examples = 5 * seq_edits
+        n_edit_examples = len(dataset) // 10
         val_dataset, edit_dataset = random_split(dataset, [len(dataset) - n_edit_examples, n_edit_examples])
     except:
         print(f"Not enough validation data to perform {n_edit_examples} edits")
 
-    edit_generator = editGenerator(edit_dataset)
+    edit_generator = editGenerator(edit_dataset, config.n_edits)
+    val_loader = DataLoader(val_dataset, batch_size=200, shuffle=True, num_workers=2)
 
-    top1 = utils.AverageMeter('Acc@1', ':6.2f')
-    top5 = utils.AverageMeter('Acc@5', ':6.2f')
-
-    for inputs, labels in DataLoader(val_dataset, batch_size=100, shuffle=True, num_workers=2):
-        inputs = inputs.to(DEVICE)
-        labels = labels.to(DEVICE)
-        model.eval()
-
-        logits = model(inputs)
-        acc1, acc5 = accuracy(logits, labels, topk=(1,5))
-
-        top1.update(acc1, inputs.shape[0])
-        top5.update(acc5, inputs.shape[0])
-    
-    orig_acc1 = top1.avg
-    orig_acc5 = top5.avg
-    orig_params = get_params(model)
-
-    with open(saveloc, "w") as f:
+    with torch.no_grad(), open(saveloc, "w") as f:
         f.write(
             "model_number,edit_number,train_step,n_edit_steps,edit_step,log_prob,"
-            "orig_acc1,new_acc1,orig_acc5,new_acc5,norm\n"
+            "loss,orig_acc1,new_acc1,orig_acc5,new_acc5,norm\n"
             )
-        for train_step, (inputs, labels) in enumerate(repeater(DataLoader(val_dataset, batch_size=100, shuffle=True, num_workers=2))):
+        for train_step, (inputs, labels) in enumerate(repeater(val_loader)):
+            if train_step >= (5 * config.seq_edits):
+                break
+
+            base_inputs, loc_inputs = torch.split(inputs, [(inputs.shape[0] + 1) // 2, inputs.shape[0] // 2])
+            base_labels, loc_labels = torch.split(labels, [(labels.shape[0] + 1) // 2, labels.shape[0] // 2])
             edit_inputs, edit_labels = next(edit_generator)
 
+            base_inputs, base_labels = base_inputs.to(DEVICE), base_labels.to(DEVICE)
+            loc_inputs, loc_labels = loc_inputs.to(DEVICE), loc_labels.to(DEVICE)
+            edit_inputs, edit_labels = edit_inputs.to(DEVICE), edit_labels.to(DEVICE)
+
+            model.eval()
+            base_logits = model(base_inputs)
+            l_base = F.cross_entropy(base_logits, base_labels)
+
             model_edited, l_edit, lp_hist, ll_change, edit_success = performEdits(
-                model_edited,
+                model,
                 edit_inputs,
                 edit_labels,
-                10,
+                config.n_edit_steps,
                 lrs,
-                1e-5
+                1e-3,
+                "val"
             )
 
+            model_edited.eval()
+            loc_logits = model(loc_inputs)
+            edited_loc_logits = model_edited(loc_inputs)
+            l_loc = (
+                F.softmax(loc_logits, dim=-1) *
+                (
+                    F.log_softmax(loc_logits, dim=-1) - 
+                    F.log_softmax(edited_loc_logits, dim=-1)
+                )).sum(-1).mean()
+
+            total_edit_loss = (
+                config.cloc * l_loc  + 
+                config.cedit * l_edit
+            )
+            total_loss = l_base.item() + total_edit_loss.item()
+
             if (edit_number + 1) % 20 == 0:
-                top1.reset()
-                top5.reset()
-
-                for inputs, labels in DataLoader(val_dataset, batch_size=100, shuffle=True, num_workers=2):
-                    inputs = inputs.to(DEVICE)
-                    labels = labels.to(DEVICE)
-                    model_edited.eval()
-
-                    logits = model_edited(inputs)
-                    acc1, acc5 = accuracy(logits, labels, topk=(1,5))
-
-                    top1.update(acc1, inputs.shape[0])
-                    top5.update(acc5, inputs.shape[0])
-                
-                new_acc1 = top1.avg
-                new_acc5 = top5.avg
-            
+                orig_acc1, orig_acc5 = evaluateOnDataset(model, val_dataset)
+                new_acc1, new_acc5 = evaluateOnDataset(model_edited, val_dataset)
             else:
-                new_acc1 = ""
-                new_acc5 = ""
+                orig_acc1 = orig_acc5 = new_acc1 = new_acc5 = ""
 
             norm_diff = orig_params.sub(get_params(model_edited)).norm().item()
+            model = model_edited
 
             for idx, val in enumerate(lp_hist):
                 run = (
-                    model_number, edit_number, train_step, n_edit_steps, idx, val, 
-                    orig_acc1, new_acc1, orig_acc5, new_acc5, norm_diff
+                    model_number, edit_number, train_step, config.n_edit_steps, idx, val, 
+                    total_loss, orig_acc1, new_acc1, orig_acc5, new_acc5, norm_diff
                 )
-                form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
+                form = lambda x: str(x.mean().cpu().item()) if torch.is_tensor(x) else str(x)
                 writeStr = ",".join([form(x) for x in run])
                 f.write(f"{writeStr}\n")
 
-            if edit_number < (seq_edits - 1):
+            if edit_number < (config.seq_edits - 1):
                 edit_number += 1
             else:
                 edit_number = 0
                 model_number += 1
-                model_edited.load_state_dict(model.state_dict())
-
-            n_edits += 1
-            if n_edits >= (5 * seq_edits):
-                break
+                model.load_state_dict(original_model.state_dict())
 
     print(f"Logged to {saveloc}")
 
@@ -279,8 +288,7 @@ def main(config: DictConfig):
         model,
         dataset,
         model_path,
-        config.n_edit_steps,
-        config.seq_edits,
+        config,
         loc
     )
 

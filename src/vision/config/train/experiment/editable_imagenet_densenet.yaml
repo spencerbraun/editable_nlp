@@ -12,11 +12,9 @@ epochs: 2
 loss: kl
 outer_lr: 1.0e-6
 inner_lr: 5.0e-6
-n_edit_steps: 10
+n_edit_steps: 1
+n_edits: 16
 cedit: 0.1
 cloc: 0.1
 learnable_lr: True
 lr_lr: 1.0e-07
-
-model_save_pt: 1000
-silent: False

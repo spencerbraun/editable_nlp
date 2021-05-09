@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, RandomSampler, Subset
+from torch.utils.data import DataLoader, RandomSampler, Subset, random_split
 from torchvision.models import resnet18, densenet169
 import higher
 
@@ -59,8 +59,7 @@ class BaseTrainer:
             f"{self.model_dir}/{model}_epoch{epoch}_ts{step}.{self.timestamp}"
         )
 
-        self.train_set = train_set
-        self.val_set = val_set
+        self.configure_data(train_set, val_set)
 
         if not self.config.debug:
             wandb.init(
@@ -92,6 +91,10 @@ class BaseTrainer:
                 f"Epoch: {self.epoch}; TrainStep {train_step}; ",
                 f"; ".join([f"{key} {val}" for key,val in kwargs.items()])
             ))
+
+    def configure_data(self, train_set, val_set):
+        self.train_set = train_set
+        self.val_set = val_set
 
     def compute_base_loss(self, inputs, labels):
         if self.config.loss == 'cross_entropy':
@@ -173,7 +176,8 @@ class BaseTrainer:
         if not self.config.debug:
             torch.save(self.config, self.hyperspath)
 
-        self.configure_optimizers()
+        self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config.outer_lr)
+        self.scheduler = None
 
         self.model.train()
         self.global_iter = 0
@@ -217,14 +221,6 @@ class BaseTrainer:
                 self.scheduler.step()
 
         self.saveState(self.model, self.global_iter, final=True)
-        if self.config.learnable_lr:
-            self.saveState(self.lrs, self.global_iter, final=True, name='lr')
-    
-    def configure_optimizers(self):
-        self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config.outer_lr)
-        self.scheduler = None
-        self.lrs = None
-        self.lr_opt = None
 
 
 class EditTrainer(BaseTrainer):
@@ -235,13 +231,23 @@ class EditTrainer(BaseTrainer):
         elif self.config.model == 'densenet169':
             utils.prep_densenet_for_maml(self.model)
 
-        self.train_edit_gen = editGenerator(train_set)
-        self.val_edit_gen = editGenerator(val_set)
+    def configure_data(self, train_set, val_set):
+        n_train_edit_examples = len(train_set) // 10
+        n_val_edit_examples = len(val_set) // 10
+        self.train_set, train_edit_data = random_split(train_set, [len(train_set) - n_train_edit_examples, n_train_edit_examples])
+        self.val_set, val_edit_data = random_split(val_set, [len(val_set) - n_val_edit_examples, n_val_edit_examples])
+
+        self.train_edit_gen = editGenerator(train_edit_data, self.config.n_edits)
+        self.val_edit_gen = editGenerator(val_edit_data, self.config.n_edits)
 
     def train_step(self, inputs, labels):
-        inputs = inputs.to(self.device)
-        labels = labels.to(self.device)
+        base_inputs, loc_inputs = torch.split(inputs, [(inputs.shape[0] + 1) // 2, inputs.shape[0] // 2])
+        base_labels, loc_labels = torch.split(labels, [(labels.shape[0] + 1) // 2, labels.shape[0] // 2])
         edit_inputs, edit_labels = next(self.train_edit_gen)
+
+        base_inputs, base_labels = base_inputs.to(self.device), base_labels.to(self.device)
+        loc_inputs, loc_labels = loc_inputs.to(self.device), loc_labels.to(self.device)
+        edit_inputs, edit_labels = edit_inputs.to(self.device), edit_labels.to(self.device)
 
         self.model.train()
         self.opt.zero_grad()
@@ -250,8 +256,8 @@ class EditTrainer(BaseTrainer):
 
         total_loss = 0.0
 
-        l_base, base_logits = self.compute_base_loss(inputs, labels)
-        acc1_pre, acc5_pre = accuracy(base_logits, labels, topk=(1,5))
+        l_base, base_logits = self.compute_base_loss(base_inputs, base_labels)
+        acc1_pre, acc5_pre = accuracy(base_logits, base_labels, topk=(1,5))
         l_base.backward()
         total_loss += l_base.item()
 
@@ -261,29 +267,32 @@ class EditTrainer(BaseTrainer):
             edit_labels,
             self.config.n_edit_steps,
             self.lrs,
-            self.config.inner_lr
+            self.config.inner_lr,
+            "train"
         )
 
-        edited_base_logits = model_edited(inputs)
-        acc1_post, acc5_post = accuracy(edited_base_logits, labels, topk=(1,5))
+        loc_logits = self.model(loc_inputs)
+        edited_loc_logits = model_edited(loc_inputs)
         l_loc = (
-            F.softmax(base_logits.detach(), dim=-1) *
+            F.softmax(loc_logits.detach(), dim=-1) *
             (
-                F.log_softmax(base_logits.detach(), dim=-1) - 
-                F.log_softmax(edited_base_logits, dim=-1)
+                F.log_softmax(loc_logits.detach(), dim=-1) - 
+                F.log_softmax(edited_loc_logits, dim=-1)
             )).sum(-1).mean()
 
         total_edit_loss = (
             self.config.cloc * l_loc  + 
             self.config.cedit * l_edit
-        )  # / self.config.n_edits
+        )
         total_edit_loss.backward()
         total_loss += total_edit_loss.item()
+
+        edited_base_logits = model_edited(base_inputs)
+        acc1_post, acc5_post = accuracy(edited_base_logits, base_labels, topk=(1,5))
 
         self.opt.step()
         if self.config.learnable_lr:
             self.lr_opt.step()
-            self.saveState(self.lrs, self.global_iter, name='lr')
 
         print('Train step {}\tLoss: {:.2f}\tEdit success: {:.2f}\tPre-edit top-1 acc: {:.2f}\tPost-edit top-1 acc: {:.2f}\t' \
                 'Pre-edit top-5 acc: {:.2f}\tPost-edit top-5 acc: {:.2f}'.format(
@@ -311,61 +320,62 @@ class EditTrainer(BaseTrainer):
         top1_post, top5_post = [], []
         losses, ll_changes, edit_successes = [], [], []
 
-        val_subset = Subset(self.val_set, np.random.randint(0, len(self.val_set), 100))
-        val_loader = DataLoader(
-            val_subset,
-            batch_size=100,
-            shuffle=True,
-            num_workers=2
-        )
-
-        total_loss = 0.0
+        val_loader = DataLoader(self.val_set, batch_size=2*self.config.bs, shuffle=True, num_workers=2)
 
         with torch.no_grad():
-            self.model.eval()
-            inputs, labels = next(iter(val_loader))
-            inputs = inputs.to(self.device)
-            labels = labels.to(self.device)
+            for edit_num, (inputs, labels) in enumerate(val_loader):
+                if edit_num >= 10:  # validate on 10 edits
+                    break
 
-            l_base, base_logits = self.compute_base_loss(inputs, labels)
-            acc1_pre, acc5_pre = accuracy(base_logits, labels, topk=(1, 5))
-            total_loss += l_base.item()
+                base_inputs, loc_inputs = torch.split(inputs, [(inputs.shape[0] + 1) // 2, inputs.shape[0] // 2])
+                base_labels, loc_labels = torch.split(labels, [(labels.shape[0] + 1) // 2, labels.shape[0] // 2])
+                edit_inputs, edit_labels = next(self.val_edit_gen)
 
-            top1_pre.append(acc1_pre)
-            top5_pre.append(acc5_pre)
+                base_inputs, base_labels = base_inputs.to(self.device), base_labels.to(self.device)
+                loc_inputs, loc_labels = loc_inputs.to(self.device), loc_labels.to(self.device)
+                edit_inputs, edit_labels = edit_inputs.to(self.device), edit_labels.to(self.device)
 
-            for edit_num, (edit_inputs, edit_labels) in enumerate(list(itertools.islice(self.val_edit_gen, 10))):
-                
+                self.model.eval()
+                l_base, base_logits = self.compute_base_loss(base_inputs, base_labels)
+                acc1_pre, acc5_pre = accuracy(base_logits, base_labels, topk=(1, 5))
+
+                top1_pre.append(acc1_pre)
+                top5_pre.append(acc5_pre)
+
                 model_edited, l_edit, lp_hist, ll_change, edit_success = performEdits(
                     self.model,
                     edit_inputs,
                     edit_labels,
                     self.config.n_edit_steps,
                     self.lrs,
-                    self.config.inner_lr
+                    self.config.inner_lr,
+                    "val"
                 )
                 ll_changes.append(ll_change)
                 edit_successes.append(edit_success)
 
                 model_edited.eval()
-                edited_base_logits = model_edited(inputs)
-                acc1_post, acc5_post = accuracy(edited_base_logits, labels, topk=(1, 5))
+                loc_logits = self.model(loc_inputs)
+                edited_loc_logits = model_edited(loc_inputs)
                 l_loc = (
-                    F.softmax(base_logits, dim=-1) *
+                    F.softmax(loc_logits, dim=-1) *
                     (
-                        F.log_softmax(base_logits, dim=-1) - 
-                        F.log_softmax(edited_base_logits, dim=-1)
+                        F.log_softmax(loc_logits, dim=-1) - 
+                        F.log_softmax(edited_loc_logits, dim=-1)
                     )).sum(-1).mean()
 
                 total_edit_loss = (
                     self.config.cloc * l_loc  + 
                     self.config.cedit * l_edit
-                ) # / self.config.n_edits
-                total_loss += total_edit_loss.item()
+                )
+                total_loss = l_base.item() + total_edit_loss.item()
                 losses.append(total_loss)
 
-            top1_post.append(acc1_post)
-            top5_post.append(acc5_post)
+                edited_base_logits = model_edited(base_inputs)
+                acc1_post, acc5_post = accuracy(edited_base_logits, base_labels, topk=(1, 5))
+
+                top1_post.append(acc1_post)
+                top5_post.append(acc5_post)
 
         print('Epoch {} Validation\tLoss: {:.2f}\tEdit success: {:.2f}\tPre-edit top-1 acc: {:.2f}\tPost-edit top-1 acc: {:.2f}\t' \
                 'Pre-edit top-5 acc: {:.2f}\tPost-edit top-5 acc: {:.2f}'.format(
@@ -382,13 +392,64 @@ class EditTrainer(BaseTrainer):
                 'acc/top5_post_val': np.mean(top5_post),
             })
 
-    def configure_optimizers(self):
-        super().configure_optimizers()
+    def run(self):
+        if not self.config.debug:
+            torch.save(self.config, self.hyperspath)
+
+        self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config.outer_lr)
+        self.scheduler = None
         self.lrs = [
             torch.nn.Parameter(torch.tensor(self.config.inner_lr)) 
             for p in type(self.model).inner_params(self.model)
         ]
         self.lr_opt = torch.optim.SGD(self.lrs, lr=self.config.lr_lr)
+
+        self.model.train()
+        self.global_iter = 0
+        train_loader = DataLoader(self.train_set, batch_size=2*self.config.bs, shuffle=True, num_workers=2)
+
+        print("Starting training")
+
+        for epoch in range(self.config.epochs):
+            self.epoch = epoch
+            losses = utils.AverageMeter('Loss', ':.4e')
+            top1 = utils.AverageMeter('Acc@1', ':6.2f')
+            top5 = utils.AverageMeter('Acc@5', ':6.2f')
+
+            for train_step, (inputs, labels) in enumerate(train_loader):
+
+                loss, acc1, acc5 = self.train_step(inputs, labels)
+
+                losses.update(loss, inputs.shape[0])
+                top1.update(acc1, inputs.shape[0])
+                top5.update(acc5, inputs.shape[0])
+
+                if self.global_iter % 100 == 0:
+                    self.val_step()
+
+                self.saveState(self.model, self.global_iter, self.config.model)
+                if self.config.learnable_lr:
+                    self.saveState(self.lrs, self.global_iter, name='lr')
+                self.global_iter += 1
+
+            print('Epoch {} Train\tLoss: {:.2f}\tTop-1 acc: {:.2f}\tTop-5 acc: {:.2f}'.format(
+                self.epoch, losses.avg, top1.avg, top5.avg))
+
+            if not self.config.debug:
+                wandb.log({
+                    'step': self.global_iter,
+                    'loss/train_avg': losses.avg,
+                    'acc/top1_train_avg': top1.avg,
+                    'acc/top5_train_avg': top5.avg,
+                    'lr': self.opt.param_groups[0]['lr'],
+                })
+
+            if self.scheduler:
+                self.scheduler.step()
+
+        self.saveState(self.model, self.global_iter, final=True)
+        if self.config.learnable_lr:
+            self.saveState(self.lrs, self.global_iter, final=True, name='lr')
 
 
 @hydra.main(config_path='config/train', config_name='config')
