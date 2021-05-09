@@ -452,7 +452,8 @@ class SelfSampleTrainer(EditTrainer):
         if mask_.shape == labels.shape:
             labels = labels[mask_].unsqueeze(0)
         else: 
-            labels = labels.unsqueeze(0)
+            labels = labels[torch.ones(labels.shape, dtype=torch.bool)].unsqueeze(0)
+
 
         return tokens.to(self.device), mask.to(self.device), labels.to(self.device)
 
@@ -504,11 +505,15 @@ class SelfSampleTrainer(EditTrainer):
                     edit_template = edit_template[:1]
                     edit_temp_mask = edit_temp_mask[:1]
                     edit_template, edit_temp_mask, _ = self.strip_padding(edit_tokens, edit_mask, edit_labels)
+                    if edit_tokens.shape[-1] > 500:
+                        print(f"Sequence {batch_idx} too long: Skipping...")
+                        continue
                     
                 
                 edit_tokens = edit_tokens[:1]
                 edit_mask = edit_mask[:1]
                 edit_labels = edit_labels[:1]
+
                 edit_tokens, edit_mask, edit_labels = self.strip_padding(edit_tokens, edit_mask, edit_labels)
                 edit_locs, gold_tokens = self.get_edit_locs(edit_tokens, edit_labels)
 
@@ -591,6 +596,9 @@ class SelfSampleTrainer(EditTrainer):
                     ) = datapack
                     lm_tokens, lm_mask, lm_labels = self.mask_padding(lm_tokens, lm_mask, lm_labels)
                     loc_tokens, loc_mask, loc_labels = self.mask_padding(loc_tokens, loc_mask, loc_labels)
+                    if max(lm_tokens.shape[-1],loc_tokens.shape[-1],edit_tokens.shape[-1]) > 500:
+                        print(f"Sequence {train_step} too long: Skipping...")
+                        continue
 
                 # Cache the current params and grads since we're going to modify the model during
                 #  the edit process
@@ -736,7 +744,7 @@ class SelfSampleTrainer(EditTrainer):
                         lr_opt.step()
                         lr_opt.zero_grad()
             
-                if (train_step % self.config.val_interval == 0): #and (not self.config.debug):
+                if (train_step % self.config.val_interval == 0) and (not self.config.debug):
                     self.validateSelfSampleTraining()
         
         self.saveState(self.model, global_iter, final=True, name="self_sample")

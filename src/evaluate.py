@@ -58,9 +58,9 @@ def getT5IndexedProbs(model, index, gold_tokens, sent_tokens, labels):
 
     model.eval()
     with torch.no_grad():
-        output = model(input_ids=sent_tokens, labels=labels.squeeze(0))
+        output = model(input_ids=sent_tokens, labels=labels)
         output_lps = F.log_softmax(output.logits, dim=-1)
-        logits = output_lps[:,index,:].detach().cpu().squeeze(0) #squeeze batch size
+        logits = output_lps[:,list(range(1, (output_lps.shape[1] - 2))),:].detach().cpu().squeeze(0) #squeeze batch size
         
         gold_tokens = gold_tokens.flatten().unsqueeze_(1)
         logit_sum = torch.sum(logits.gather(1, gold_tokens))
@@ -114,10 +114,6 @@ def performOneEdit(
             edit_template, edit_temp_mask, edit_labels
             ) = edit_package
 
-#         edit_list = edit_template.squeeze().cpu().tolist()
-#         edit_pre = edit_list[:edit_list.index(32099)]
-#         edit_post = edit_list[(edit_list.index(32099) + 1):]
-#         edit_template = torch.tensor(edit_pre + gold_tokens.tolist() + edit_post).unsqueeze(0).cuda()
         idxProbs = getT5IndexedProbs
     
     logit_hist = []
