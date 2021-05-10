@@ -143,8 +143,76 @@ class DataProcessor:
                 f"<{sum([len(self.ents[k]) for k in self.ents])} ENTS>")
 
 
+class NTokenDataset(torch.utils.data.IterableDataset):
+    def __init__(self, list_IDs, tokenizer, data_loc="..", dataset='train', max_length=200, batch_size=1, self_sample=False,
+                 n_edits=1, n_edit_tokens=5):
+        self.list_IDs = list_IDs
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.dataset = dataset
+        self.loc = data_loc
+        self.self_sample = self_sample
+        self.n_edits = n_edits
+        self.wiki = WikitextDataset("/scr/em7", dataset=dataset, filter_=False)
+        self.batch_size = batch_size
+        self.n_edit_tokens = n_edit_tokens
+
+        if self.dataset == "validation":
+            self.dataset = "valid"
+
+    def tokenize(self, text):
+        tok = self.tokenizer(
+            text,
+            truncation=True,
+            max_length=self.max_length, 
+            padding="max_length",
+            return_tensors="pt"
+        )
+        return tok["input_ids"], tok["attention_mask"]
+
+    def __iter__(self):
+        return (self[idx] for idx in range(len(self)))
+    
+    def __len__(self):
+        return len(self.wiki)
+    
+    def __getitem__(self, index):
+        rng = np.random.default_rng(index)
+        edit_idxs = rng.choice(self.list_IDs, self.n_edits, replace=False)
+        loc_idxs = rng.choice(len(self.wiki), self.n_edits, replace=False)
+        base_idxs = rng.choice(len(self.wiki), self.batch_size, replace=False)
+        
+        path = f"{self.loc}/data/self_sample/{self.dataset}"
+        original, edited = [], []
+        for idx in edit_idxs:
+            with open(f"{path}/original_text.{idx}") as orig:
+                original_text = orig.read()
+            with open(f"{path}/generated_text.{idx}") as gen:
+                generated_text = gen.read()
+
+            original.append(self.tokenize(" " + original_text))
+            edited.append(self.tokenize(" " + generated_text))
+
+        original_tokens, original_mask = tuple(zip(*original))
+        edited_tokens, edited_mask = tuple(zip(*edited))
+        
+        loc_tokens, loc_mask = tuple(zip(*[self.tokenize(self.wiki[idx]) for idx in loc_idxs]))
+        base_tokens, base_mask = tuple(zip(*[self.tokenize(self.wiki[idx]) for idx in base_idxs]))
+
+        to_return = [base_tokens, base_mask, loc_tokens, loc_mask, original_tokens, original_mask, edited_tokens, edited_mask]
+        to_return = [torch.cat(tensors) for tensors in to_return]
+
+        edited_labels = to_return[-2].clone()
+        edited_labels[:,:-(self.n_edit_tokens+1)] = -100
+        edited_labels[:,-1] = -100
+        to_return.append(edited_labels)
+
+        return to_return
+    
+
 class TorchDataset(torch.utils.data.Dataset):
-    def __init__(self, list_IDs, tokenizer, data_loc="..", dataset='train', max_length=200, self_sample=False):
+    def __init__(self, list_IDs, tokenizer, data_loc="..", dataset='train', max_length=200, self_sample=False,
+                 n_edits=1):
         self.list_IDs = list_IDs
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -152,7 +220,10 @@ class TorchDataset(torch.utils.data.Dataset):
         self.dataset = dataset
         self.loc = data_loc
         self.self_sample = self_sample
+        self.n_edits = n_edits
 
+        rng = np.random.default_rng(0)
+        self.edit_batches = [rng.choice(self.list_IDs, n_edits, replace=False) for _ in self.list_IDs]
 
     def tokenize(self, textList, ent=False):
         tokList = []
@@ -201,28 +272,36 @@ class TorchDataset(torch.utils.data.Dataset):
         elif self.dataset == 'test':
             path = os.path.join(path, 'test')
 
-        if self.self_sample:
-            with open(f"{path}/original_text.{ID}") as orig:
-                original_text = orig.read()
-            with open(f"{path}/generated_text.{ID}") as gen:
-                generated_text = gen.read()
-            
-            raw, perm = self.tokenize([" "+original_text, " "+generated_text])
-            new_ent_tok, old_ent_tok = -1, -1  # unused
+        raw, perm, new_ent_tok, old_ent_tok = [], [], [], []
+        for idx in self.edit_batches[ID]:
+            if self.self_sample:
+                with open(f"{path}/original_text.{idx}") as orig:
+                    original_text = orig.read()
+                with open(f"{path}/generated_text.{idx}") as gen:
+                    generated_text = gen.read()
 
-        else:
-            with open(f"{path}/original_entities.{ID}") as raw:
-                raw_sample = raw.read()
-            with open(f"{path}/permuted_entities.{ID}") as perm:
-                permuted_sample = perm.read()
-            with open(f"{path}/entity_swaps.{ID}") as ent:
-                ent_sample = ent.read()
-                ents = ent_sample.strip().split('|')
-                new_ent = ents[-1]
-                old_ent = ents[0]
+                tokens = self.tokenize([" "+original_text, " "+generated_text])
+                raw.append(tokens[0])
+                perm.append(tokens[1])
+                new_ent_tok.append(-1) # unused
+                old_ent_tok.append(-1) # unused
+            else:
+                with open(f"{path}/original_entities.{idx}") as raw:
+                    raw_sample = raw.read()
+                with open(f"{path}/permuted_entities.{idx}") as perm:
+                    permuted_sample = perm.read()
+                with open(f"{path}/entity_swaps.{idx}") as ent:
+                    ent_sample = ent.read()
+                    ents = ent_sample.strip().split('|')
+                    new_ent = ents[-1]
+                    old_ent = ents[0]
 
-            raw, perm = self.tokenize([" "+raw_sample, " "+permuted_sample])
-            new_ent_tok, old_ent_tok = self.tokenize([" "+new_ent, " "+old_ent], ent=True)
+                tokens = self.tokenize([" "+raw_sample, " "+permuted_sample])
+                ent_tokens = self.tokenize([" "+new_ent, " "+old_ent], ent=True)
+                raw.append(tokens[0])
+                perm.append(tokens[1])
+                new_ent_tok.append(ent_tokens[0])
+                old_ent_tok.append(ent_tokens[1])
 
         return raw, perm, new_ent_tok, old_ent_tok
 
@@ -230,10 +309,11 @@ class TorchDataset(torch.utils.data.Dataset):
 class WikitextDataset(torch.utils.data.Dataset):
     def __init__(
         self, 
-        data_loc="..", 
+        data_loc="/scr", 
         dataset='train', 
         pct=100, 
-        min_length=100
+        min_length=100,
+        filter_=True
     ):
         self.dataset = load_dataset(
             'wikitext', 
@@ -241,7 +321,12 @@ class WikitextDataset(torch.utils.data.Dataset):
             cache_dir=data_loc, 
             split=f'{dataset}[:{pct}%]'
         )
-        self.filtered = self.filterText(self.dataset['text'])
+        print(f"Filtering {len(self.dataset['text'])} wiki items")
+        if filter_:
+            self.filtered = self.filterText(self.dataset['text'])
+        else:
+            self.filtered = self.dataset['text']
+        print(f"Got {len(self.filtered)} wiki items.")
         self.min_length = min_length
     
     @staticmethod
@@ -261,8 +346,15 @@ class WikitextDataset(torch.utils.data.Dataset):
         return len(self.filtered)
 
     def __getitem__(self, index):
+
+        item = self.filtered[index]
+        if len(item.split()) < 2:
+            rng = np.random.default_rng(index)
+            new_idx = rng.choice(len(self))
+            # print(f"Skipping empty element {item}, @{index} for idx {new_idx}")
+            return self[new_idx]
         
-        return self.filtered[index]
+        return item
 
 def generateDataset(
     writeDir, 
@@ -397,17 +489,46 @@ def selfSampleDataset(
         genFile.close()
 
 
+def _test(loc):
+    import glob
+    from transformers import GPT2Tokenizer
+    
+    print(f'Running from {loc}')
+
+    data_path = f"{loc}/data/self_sample"
+    writtenFiles = glob.glob(f"{data_path}/train/*")
+    fileIndex = max(map(lambda x: int(x.split(".")[-1]), writtenFiles))
+
+    tokenizer = GPT2Tokenizer.from_pretrained(
+        'gpt2', cache_dir="/scr/em7"
+        )
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "right"
+
+    d = NTokenDataset(list(range(fileIndex)), tokenizer, loc, n_edits=5)
+    start = time.time()
+    for idx in range(100):
+        d[idx]
+    print(time.time()-start)
+
+        
+
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--train', action='store_true', default=False)
     parser.add_argument('--valid', action='store_true', default=False)  
     parser.add_argument('--test', action='store_true', default=False)  
-    parser.add_argument('--self_sample', action='store_true', default=False)                      
+    parser.add_argument('--self_sample', action='store_true', default=False)
+    parser.add_argument('--run_test', action='store_true')
     args = parser.parse_args()
 
     loc = utils.sailPreprocess()
 
+    if args.run_test:
+        _test(loc)
+        exit()
+    
     func = selfSampleDataset if args.self_sample else generateDataset
     if args.train:
         print("generating training set")
@@ -427,7 +548,7 @@ if __name__ == "__main__":
             set='validation', 
             pct='100'
         )
-            
+
     if args.test:
         print("generating test set")
         func(

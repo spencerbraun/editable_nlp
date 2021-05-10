@@ -4,6 +4,7 @@ import argparse
 import os
 import shutil
 from datetime import datetime
+import re
 
 import glob
 import numpy as np
@@ -27,20 +28,19 @@ def get_params(model):
     return torch.cat([p.view(-1) for p in model.parameters()])
 
 def perplexity(model, dataloader):
-    total_loss = []
     model.to(DEVICE)
     model.eval()
+    acc = utils.NLLAccumulator()
     with torch.no_grad():
-        for batch_idx, (lm_data, edit_example, _, _) in enumerate(dataloader):
-            lm_tokens, lm_mask = lm_data
+        for batch_idx, (lm_data, _, _, _) in enumerate(dataloader):
+            lm_tokens, lm_mask = lm_data[0]
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
-            out = model(lm_tokens, labels=lm_labels)
+            loss = model(lm_tokens, labels=lm_labels).loss
+            acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels))
 
-            loss = out.loss
-            total_loss.append(loss)
-
-    return torch.exp(torch.mean(torch.stack(total_loss)))
+    avg_loss, ppl = acc.get_metrics()
+    return torch.tensor(ppl)
 
 def getIndexedProbs(model, index, gold_tokens, sent_tokens):
 
@@ -58,7 +58,8 @@ def getIndexedProbs(model, index, gold_tokens, sent_tokens):
 def loadLr(model_path):
     model_name = os.path.basename(model_path)
     model_id = model_name.split(".")[-1]
-    step = model_name.split("_")[-1].split(".")[0]
+    step = re.search('ts.*\.', model_name).group(0)[:-1]
+    # step = model_name.split("_")[-1].split(".")[0]
     dir_loc = os.path.dirname(model_path)
     lr_glob = glob.glob(f"{dir_loc}/lr_epoch0_{step}.*{model_id}")
 
@@ -82,11 +83,15 @@ def performOneEdit(
     gold_tokens,
     n_edit_steps=10
     ):
-    
+
+    if not hasattr(model, "inner_params"):
+        raise RuntimeError("Model has no `inner_params.` An `inner_params`"
+                           " function should be patched in after model creation"
+                           " and before editing.")
     model.train()
     param_groups = [
         {'params': p, 'lr': 1e-3} 
-        for p in model.transformer.h[-3:].parameters()
+        for p in model.inner_params()
     ]
     inner_opt = (torch.optim.SGD(param_groups))
     
@@ -94,22 +99,25 @@ def performOneEdit(
     logit_hist.append(
         getIndexedProbs(model, edit_locs, gold_tokens, edit_tokens)
     )
-    
     with higher.innerloop_ctx(
         model, 
         inner_opt, 
         override={'lr': lrs} if lrs else None,
         copy_initial_weights=False, 
-        track_higher_grads=True
+        track_higher_grads=False # We don't need these because we're only evaluating (no outer loop)
         ) as (fmodel, diffopt):
         
         for edit_step in range(n_edit_steps):
 
+            if hasattr(fmodel, "set_editing"):
+                fmodel.set_editing(True)
             output = fmodel(
                 edit_tokens, 
                 attention_mask=edit_mask,
                 labels=edit_labels
             )
+            if hasattr(fmodel, "set_editing"):
+                fmodel.set_editing(False)
             diffopt.step(output.loss)
 
             logit_hist.append(
@@ -119,10 +127,11 @@ def performOneEdit(
             ll_change = (abs(logit_hist[0]) - abs(logit_hist[-1]))/abs(logit_hist[0])
             print(f"logit history: {logit_hist}")
             print(f"Edit step {edit_step}; ll change {ll_change} , logit {logit_hist[-1]}, loss {output.loss}")
-        
-        model.load_state_dict(fmodel.state_dict())
-    
-    return model, logit_hist
+
+    edited_model = copy.deepcopy(model)
+    edited_model.load_state_dict(fmodel.state_dict())
+
+    return edited_model, logit_hist, ll_change, output.loss
 
 def genModelText(finetuned, lm_tokens):
 
@@ -255,8 +264,7 @@ def evalSelfSample(
     model_number = 0
     sequential = seq_edits > 1
     
-    model.to(DEVICE)
-    model_edited = copy.deepcopy(model)
+    model_edited = copy.deepcopy(model).to(DEVICE)
 
     orig_ppl = perplexity(model, dataloader)
     orig_params = get_params(model)
@@ -271,11 +279,11 @@ def evalSelfSample(
             print(f"Edit number {edit_number}")
             print(f"Model number {model_number}")
             
-            lm_tokens, lm_mask = lm_data
+            lm_tokens, lm_mask = lm_data[0]
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
 
-            edit_tokens, edit_mask = edit_example
+            edit_tokens, edit_mask = edit_example[0]
             # remove left padding
             edit_tokens = edit_tokens.squeeze(0)
             edit_tokens = edit_tokens[edit_tokens != 50256].unsqueeze(0)
@@ -292,8 +300,7 @@ def evalSelfSample(
             edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
 
             gold_tokens = gold_tokens.cpu()
-
-            model_edited, logit_hist = performOneEdit(
+            model_edited, logit_hist, ll_change, loss = performOneEdit(
                 model_edited,
                 lrs,
                 edit_tokens, 
@@ -330,6 +337,7 @@ def evalSelfSample(
             n_edits +=1 
             if n_edits >= (5 * seq_edits):
                 break
+        print(f"Saved results to {saveloc}")
     if copy_to:
         shutil.copyfile(saveloc, f"{copy_to}/{filename}")
 
@@ -464,6 +472,7 @@ if __name__ == "__main__":
     parser.add_argument('--model_path', help='')
     parser.add_argument('--test_set', action='store_true')
     parser.add_argument('--self_sample', action='store_true')
+    parser.add_argument('--split_params', action='store_true')
     parser.add_argument('--edit_steps', default=5, type=int)
     parser.add_argument('--seq_edits', default=1, type=int)
     parser.add_argument('--copy_to')
@@ -472,7 +481,8 @@ if __name__ == "__main__":
     loc = utils.sailPreprocess()
 
     if args.model_path: 
-        model, tokenizer = utils.loadTrainedModel(args.model_path, cache_dir=loc)
+        model, tokenizer = utils.loadTrainedModel(args.model_path, cache_dir=loc,
+                                                  split_params=args.split_params)
 
     ds = 'test' if args.test_set else 'validation'
     dataloader = utils.retrieveEditDataloader(
@@ -485,7 +495,7 @@ if __name__ == "__main__":
 
     if args.self_sample:
         evalSelfSample(
-            model, 
+            model,
             dataloader,
             args.model_path, 
             int(args.edit_steps),
