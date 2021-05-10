@@ -52,7 +52,7 @@ class SelfSampleGPT2Config:
         self.silent = False
         
         
-class SelfSampleT5Config:
+class T5Config:
     def __init__(self):
         self.task = 't5_self_sample'
         self.model_name = 't5-small' #t5-small or gpt2

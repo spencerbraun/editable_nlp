@@ -27,17 +27,29 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 def get_params(model):
     return torch.cat([p.view(-1) for p in model.parameters()])
 
-def perplexity(model, dataloader):
+def processLAMABatch(tokens, mask, label):
+    return (tokens.to(self.device), mask.to(self.device), 
+            label.masked_fill(label == self.tokenizer.pad_token_id, -100).to(self.device))
+
+def perplexity(model, dataloader, lama=False):
     model.to(DEVICE)
     model.eval()
     acc = utils.NLLAccumulator()
     with torch.no_grad():
-        for batch_idx, (lm_data, _, _, _) in enumerate(dataloader):
-            lm_tokens, lm_mask = lm_data[0]
-            lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
-            lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
-            loss = model(lm_tokens, labels=lm_labels).loss
-            acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels))
+        for batch_idx, batch in enumerate(dataset):
+            if lama:
+                lm_tokens, lm_mask, lm_labels = processLAMABatch(
+                    batch[0], batch[1], batch[2] if self.model_name == 't5-small' else None
+                    )
+                loss = model(lm_tokens, labels=lm_labels).loss
+                acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels))
+            else:
+                lm_data = batch[0]
+                lm_tokens, lm_mask = lm_data[0]
+                lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
+                lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
+    loss = model(lm_tokens, labels=lm_labels).loss
+    acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels))
 
     avg_loss, ppl = acc.get_metrics()
     return torch.tensor(ppl)
@@ -48,7 +60,7 @@ def getIndexedProbs(model, index, gold_tokens, sent_tokens, labels):
     with torch.no_grad():
         output = model(sent_tokens)
         output_lps = F.log_softmax(output.logits, dim=-1)
-        logits = output_lps[:,index,:].detach().cpu().squeeze(0) #squeeze batch size
+        logits = output_lps[:,index-1,:].detach().cpu().squeeze(0) #squeeze batch size
         
         gold_tokens = gold_tokens.flatten().unsqueeze_(1)
         logit_sum = torch.sum(logits.gather(1, gold_tokens))
@@ -263,6 +275,49 @@ def evalEditable(
                 break
 
 
+def processBatch(batch, lama=False):
+    if lama:
+        (
+            _, _, _,
+            _, _, _,
+            edit_tokens, edit_mask, edit_labels,
+            edit_template, edit_temp_mask, edit_labels
+        ) = batch
+        edit_template = edit_template[:1]
+        edit_temp_mask = edit_temp_mask[:1]
+        edit_template, edit_temp_mask, _ = self.strip_padding(edit_tokens, edit_mask, edit_labels)
+        if edit_tokens.shape[-1] > 500:
+            print(f"Sequence {batch_idx} too long: Skipping...")
+            continue
+        edit_locs, gold_tokens = 0, labels.flatten().unsqueeze(0)
+        edit_package = (edit_tokens, edit_mask, edit_labels, edit_template, edit_temp_mask, edit_labels)
+    else:
+        (lm_data, edit_example, _, _) = batch
+        lm_tokens, lm_mask = lm_data[0]
+        lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
+        lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
+
+        edit_tokens, edit_mask = edit_example[0]
+        # remove left padding
+        edit_tokens = edit_tokens.squeeze(0)
+        edit_tokens = edit_tokens[edit_tokens != 50256].unsqueeze(0)
+        edit_mask = edit_mask.squeeze(0)
+        edit_mask = edit_mask[edit_mask != 0].unsqueeze(0)
+
+        edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
+        edit_loc = edit_tokens.shape[-1] - 5 - 1  # minus 1 for newline token
+        edit_locs = torch.tensor([edit_loc + i for i in range(5)])
+        edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
+        gold_tokens = edit_tokens[:, edit_locs]
+
+        edit_labels = edit_labels.to(DEVICE)
+        edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
+
+        gold_tokens = gold_tokens.cpu()
+        edit_package = (edit_tokens, edit_mask, edit_labels)
+
+    return edit_package, edit_locs, gold_tokens
+
 
 def evalSelfSample(
     model, 
@@ -272,7 +327,8 @@ def evalSelfSample(
     seq_edits=1,
     loc="..",
     testset=False,
-    copy_to=""
+    copy_to="",
+    lama=False
     ):
 
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
@@ -292,7 +348,7 @@ def evalSelfSample(
     
     model_edited = copy.deepcopy(model).to(DEVICE)
 
-    orig_ppl = perplexity(model, dataloader)
+    orig_ppl = perplexity(model, dataloader, lama=lama)
     orig_params = get_params(model)
 
     with open(saveloc, "w") as f:
@@ -300,45 +356,24 @@ def evalSelfSample(
             "model_number,edit_number,train_step,n_edit_steps,edit_step,"
             "logits,orig_ppl,new_ppl,norm\n"
             )
-        for train_step, (lm_data, edit_example, _, _) in enumerate(dataloader):
+        for train_step, batch in enumerate(dataloader):
             print(f"Val Step {train_step}")
             print(f"Edit number {edit_number}")
             print(f"Model number {model_number}")
+            edit_package, edit_locs, gold_tokens = processBatch(batch, lama=lama)
             
-            lm_tokens, lm_mask = lm_data[0]
-            lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
-            lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
-
-            edit_tokens, edit_mask = edit_example[0]
-            # remove left padding
-            edit_tokens = edit_tokens.squeeze(0)
-            edit_tokens = edit_tokens[edit_tokens != 50256].unsqueeze(0)
-            edit_mask = edit_mask.squeeze(0)
-            edit_mask = edit_mask[edit_mask != 0].unsqueeze(0)
-
-            edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
-            edit_loc = edit_tokens.shape[-1] - 5 - 1  # minus 1 for newline token
-            edit_locs = torch.tensor([edit_loc + i for i in range(5)])
-            edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
-            gold_tokens = edit_tokens[:, edit_locs]
-
-            edit_labels = edit_labels.to(DEVICE)
-            edit_tokens, edit_mask = edit_tokens.to(DEVICE), edit_mask.to(DEVICE)
-
-            gold_tokens = gold_tokens.cpu()
             model_edited, logit_hist, ll_change, loss = performOneEdit(
                 model_edited,
+                't5-small' if lama else 'gpt2',
                 lrs,
-                edit_tokens, 
-                edit_mask, 
-                edit_labels,
-                edit_locs - 1, 
+                edit_package,
+                edit_locs, 
                 gold_tokens,
                 n_edit_steps=n_edit_steps
             )
 
             if (edit_number + 1) % 20 == 0:
-                new_ppl = perplexity(model_edited, dataloader)
+                new_ppl = perplexity(model_edited, dataloader, lama=lama)
             else:
                 new_ppl = ""
 
@@ -497,8 +532,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path', help='')
     parser.add_argument('--test_set', action='store_true')
-    parser.add_argument('--self_sample', action='store_true')
-    parser.add_argument('--self_sample_masked', action='store_true')    
+    parser.add_argument('--gen', action='store_true')
+    parser.add_argument('--lama', action='store_true')    
     parser.add_argument('--split_params', action='store_true')
     parser.add_argument('--edit_steps', default=5, type=int)
     parser.add_argument('--seq_edits', default=1, type=int)
@@ -508,7 +543,7 @@ if __name__ == "__main__":
     loc = utils.sailPreprocess()
 
     if args.model_path: 
-        name = 't5-small' if args.self_sample_masked else 'gpt2'
+        name = 't5-small' if args.lama else 'gpt2'
         print(f"Using model {name}")
         model, tokenizer = utils.loadTrainedModel(args.model_path, name=name, cache_dir=loc,
                                                   split_params=args.split_params)
@@ -516,13 +551,13 @@ if __name__ == "__main__":
     ds = 'test' if args.test_set else 'validation'
     
 
-    if args.self_sample:
+    if args.gen:
         dataloader = utils.retrieveEditDataloader(
             tokenizer,
             bs=1,
             data_loc=loc,
             dataset=ds,
-            self_sample=args.self_sample
+            self_sample=args.gen
         )
         evalSelfSample(
             model,
@@ -532,9 +567,10 @@ if __name__ == "__main__":
             seq_edits=args.seq_edits,
             loc=loc,
             testset=args.test_set,
-            copy_to=args.copy_to
+            copy_to=args.copy_to,
+            lama=False
             )
-    elif args.self_sample_masked:
+    elif args.lama:
         dataloader = MaskedLMDataloader(
             'lama',
             tokenizer,
@@ -554,7 +590,8 @@ if __name__ == "__main__":
             seq_edits=args.seq_edits,
             loc=loc,
             testset=args.test_set,
-            copy_to=args.copy_to
+            copy_to=args.copy_to,
+            lama=True
             )
         
     else:

@@ -373,56 +373,6 @@ class SelfSampleTrainer(EditTrainer):
         edit_tokens, edit_mask = edit_tokens.to(self.device), edit_mask.to(self.device)
 
         return edit_tokens, edit_mask, edit_labels
-            
-
-    def processMaskedLMData(self, masked_sentence, template, obj, edit_obj):
-
-        il = self.config.inner_loop
-        il_select = (np.random.randint(0,2) if il == 'random' else 1 if il == 'sentence' else 0)
-        lm_data = masked_sentence if il_select == 0 else template
-        edit_data = masked_sentence if il_select == 1 else template 
-
-        lm_tokens, lm_mask = lm_data
-        lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
-
-        lm_labels, _ = obj
-        lm_labels = lm_labels.to(self.device)
-        
-        edit_tokens_batch, edit_mask_batch = tuple(zip(*[edit_data]))
-        edit_labels_batch, edit_lab_mask_batch = tuple(zip(*[edit_obj]))
-
-        find = lambda tensor, v: torch.where(tensor[..., None] == v)
-        special_obj  = torch.tensor([32099, 32098, 1])
-        
-        def _process_edit_tokens(edit_tokens, edit_mask, edit_label, edit_lab_mask):
-            edit_label = edit_label[:, edit_lab_mask.flatten() == 1]
-            idx = np.setxor1d(list(range(edit_label.shape[1])), find(edit_label, special_obj)[1])
-            gold_tokens = edit_label[:,idx]
-            
-            edit_start = utils.locateSubset(edit_tokens, torch.tensor([32099]))
-            edit_locs = torch.tensor([edit_start + i for i in range(gold_tokens.flatten().size()[0])])
-            
-            edit_tokens, edit_mask, edit_label = (
-                edit_tokens.to(self.device), 
-                edit_mask.to(self.device),
-                edit_label.to(self.device)
-                )
-            
-            return edit_tokens, edit_mask, edit_label, edit_locs, gold_tokens
-        
-        # List of tuples
-        edit_batch = [_process_edit_tokens(et, em, el, elm) for (et, em, el, elm) in
-                      zip(edit_tokens_batch, edit_mask_batch, edit_labels_batch, edit_lab_mask_batch)]
-
-        # Tuple of lists
-        edit_tokens, edit_mask, edit_labels, edit_locs, gold_tokens = tuple(zip(*edit_batch))
-
-        return (
-            lm_tokens, lm_mask, lm_labels, 
-            edit_tokens, edit_mask, edit_labels, 
-            edit_locs, gold_tokens
-            )
-
     
     def perplexity(self, model, dataset):
         total_loss = []
@@ -431,8 +381,9 @@ class SelfSampleTrainer(EditTrainer):
         acc = utils.NLLAccumulator()
         with torch.no_grad():
             for batch_idx, batch in enumerate(dataset):
-                lm_tokens, lm_mask, lm_labels = self.mask_padding(batch[0], batch[1], 
-                                                                  batch[2] if self.model_name == 't5-small' else None)
+                lm_tokens, lm_mask, lm_labels = self.mask_padding(
+                    batch[0], batch[1], batch[2] if self.model_name == 't5-small' else None
+                    )
                 loss = model(lm_tokens, labels=lm_labels).loss
                 acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels))
 
@@ -455,27 +406,12 @@ class SelfSampleTrainer(EditTrainer):
         else: 
             labels = labels[torch.ones(labels.shape, dtype=torch.bool)].unsqueeze(0)
 
-
         return tokens.to(self.device), mask.to(self.device), labels.to(self.device)
 
     def get_edit_locs(self, tokens, labels):
         n_targets = (labels != -100).sum()
         edit_locs = torch.tensor([tokens.shape[-1] - n_targets - 1 + i for i in range(n_targets)]).to(self.device)
         gold_tokens = tokens[:,edit_locs]
-
-        return edit_locs, gold_tokens.cpu()
-
-    def get_t5_edit_locs(self, tokens, labels):
-        find = lambda tensor, v: torch.where(tensor[..., None] == v)
-        special_obj  = torch.tensor([32099, 32098, 1])
-
-        labels = labels.flatten().unsqueeze(0)
-#         idx = np.setxor1d(list(range(labels.cpu().shape[1])), find(labels.cpu(), special_obj)[1])
-        gold_tokens = labels#[:,idx]
-        
-#         edit_start = utils.locateSubset(tokens, torch.tensor([32099]))
-#         edit_locs = torch.tensor([edit_start + i for i in range(gold_tokens.flatten().size()[0])])
-        edit_locs = None
 
         return edit_locs, gold_tokens.cpu()
 
@@ -506,7 +442,7 @@ class SelfSampleTrainer(EditTrainer):
                     ) = datapack
                     edit_template = edit_template[:1]
                     edit_temp_mask = edit_temp_mask[:1]
-                    edit_template, edit_temp_mask, _ = self.strip_padding(edit_tokens, edit_mask, edit_labels)
+                    edit_template, edit_temp_mask, _ = self.strip_padding(edit_template, edit_temp_mask, edit_labels)
                     if edit_tokens.shape[-1] > 500:
                         print(f"Sequence {batch_idx} too long: Skipping...")
                         continue
@@ -517,13 +453,13 @@ class SelfSampleTrainer(EditTrainer):
                 edit_labels = edit_labels[:1]
 
                 edit_tokens, edit_mask, edit_labels = self.strip_padding(edit_tokens, edit_mask, edit_labels)
-                edit_locs, gold_tokens = self.get_edit_locs(edit_tokens, edit_labels)
+                
 
                 if self.model_name == 'gpt2':
                     edit_locs, gold_tokens = self.get_edit_locs(edit_tokens, edit_labels)
                     edit_package = (edit_tokens, edit_mask, edit_labels)
                 elif self.model_name == 't5-small':
-                    edit_locs, gold_tokens = self.get_t5_edit_locs(edit_tokens, edit_labels)
+                    edit_locs, gold_tokens = 0, labels.flatten().unsqueeze(0)
                     edit_package = (edit_tokens, edit_mask, edit_labels, edit_template, edit_temp_mask, edit_labels)
 
                 start = time.time()
@@ -537,7 +473,7 @@ class SelfSampleTrainer(EditTrainer):
                     self.model_name,
                     self.lrs,
                     edit_package,
-                    edit_locs - 1, 
+                    edit_locs, 
                     gold_tokens[0], 
                     n_edit_steps=1
                 )
@@ -761,7 +697,7 @@ if __name__ == "__main__":
     parser.add_argument('--split_params', action='store_true')
     parser.add_argument('--finetune', action='store_true')
     parser.add_argument('--self_sample', action='store_true')
-    parser.add_argument('--self_sample_masked', action='store_true')
+    parser.add_argument('--lama', action='store_true')
     parser.add_argument('--bs', default=1, type=int)
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--val_interval', type=int, default=200)
@@ -776,7 +712,7 @@ if __name__ == "__main__":
         TrainConfig() if args.finetune else
         EditConfig() if args.editable else
         SelfSampleGPT2Config() if args.self_sample else
-        SelfSampleT5Config() 
+        T5Config() 
     )
     config.write_loc = loc
     config.bs = args.bs
@@ -817,7 +753,7 @@ if __name__ == "__main__":
             self_sample=args.self_sample,
             n_edits=args.n_edits
         )
-    elif args.self_sample_masked:
+    elif args.lama:
         dataloader = MaskedLMDataloader(
             'lama',
             tokenizer,
@@ -827,7 +763,7 @@ if __name__ == "__main__":
             shuffle=True,
             max_val_len=config.max_val_len,
             mode='editable',
-            inner_loop = config.inner_loop
+            inner_loop=config.inner_loop
         )
         train = dataloader.train
         validation = dataloader.validation
