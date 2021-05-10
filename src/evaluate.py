@@ -4,6 +4,7 @@ import argparse
 import os
 import shutil
 from datetime import datetime
+import re
 
 import glob
 import numpy as np
@@ -57,7 +58,8 @@ def getIndexedProbs(model, index, gold_tokens, sent_tokens):
 def loadLr(model_path):
     model_name = os.path.basename(model_path)
     model_id = model_name.split(".")[-1]
-    step = model_name.split("_")[-1].split(".")[0]
+    step = re.search('ts.*\.', model_name).group(0)[:-1]
+    # step = model_name.split("_")[-1].split(".")[0]
     dir_loc = os.path.dirname(model_path)
     lr_glob = glob.glob(f"{dir_loc}/lr_epoch0_{step}.*{model_id}")
 
