@@ -94,12 +94,12 @@ def performEdits(model, edit_inputs, edit_labels, n_edit_steps=1, lrs=None, defa
 
     param_groups = [
         {'params': p, 'lr': None} 
-        for p in type(model).inner_params(model)
+        for p in model.inner_params()
     ]
     inner_opt = (
         torch.optim.SGD(param_groups) if lrs
         else torch.optim.SGD(
-            type(model).inner_params(model),
+            model.inner_params(),
             lr=default_lr
         )
     )
@@ -130,10 +130,7 @@ def performEdits(model, edit_inputs, edit_labels, n_edit_steps=1, lrs=None, defa
     print("Edit step {}\tMean ll change {:.2f}\tMean log prob {:.2f}\tLoss {:.2f}".format(
             edit_step, ll_change.mean().item(), lp_hist[-1].mean().item(), l_edit))
 
-    edited_model = copy.deepcopy(model)
-    edited_model.load_state_dict(fmodel.state_dict())
-
-    return edited_model, l_edit, lp_hist, ll_change, edit_success
+    return fmodel, l_edit, lp_hist, ll_change, edit_success
 
 def evaluateOnDataset(model, dataset):
     dataloader = DataLoader(dataset, batch_size=100, shuffle=True, num_workers=2)
@@ -212,10 +209,10 @@ def evalEditable(
                 model,
                 edit_inputs,
                 edit_labels,
-                config.n_edit_steps,
-                lrs,
-                1e-3,
-                "val"
+                n_edit_steps=config.n_edit_steps,
+                lrs=lrs,
+                default_lr=1e-3,
+                mode="val"
             )
 
             model_edited.eval()
@@ -234,14 +231,14 @@ def evalEditable(
             )
             total_loss = l_base.item() + total_edit_loss.item()
 
-            if (edit_number + 1) % 20 == 0:
+            if edit_number % 20 == 0:
                 orig_acc1, orig_acc5 = evaluateOnDataset(model, val_dataset)
                 new_acc1, new_acc5 = evaluateOnDataset(model_edited, val_dataset)
             else:
                 orig_acc1 = orig_acc5 = new_acc1 = new_acc5 = ""
 
             norm_diff = orig_params.sub(get_params(model_edited)).norm().item()
-            model = model_edited
+            model.load_state_dict(model_edited.state_dict())
 
             for idx, val in enumerate(lp_hist):
                 run = (

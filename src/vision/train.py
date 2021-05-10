@@ -265,10 +265,10 @@ class EditTrainer(BaseTrainer):
             self.model,
             edit_inputs,
             edit_labels,
-            self.config.n_edit_steps,
-            self.lrs,
-            self.config.inner_lr,
-            "train"
+            n_edit_steps=self.config.n_edit_steps,
+            lrs=self.lrs,
+            default_lr=self.config.inner_lr,
+            mode="train"
         )
 
         loc_logits = self.model(loc_inputs)
@@ -346,10 +346,10 @@ class EditTrainer(BaseTrainer):
                     self.model,
                     edit_inputs,
                     edit_labels,
-                    self.config.n_edit_steps,
-                    self.lrs,
-                    self.config.inner_lr,
-                    "val"
+                    n_edit_steps=self.config.n_edit_steps,
+                    lrs=self.lrs,
+                    default_lr=self.config.inner_lr,
+                    mode="val"
                 )
                 ll_changes.append(ll_change)
                 edit_successes.append(edit_success)
@@ -400,7 +400,7 @@ class EditTrainer(BaseTrainer):
         self.scheduler = None
         self.lrs = [
             torch.nn.Parameter(torch.tensor(self.config.inner_lr)) 
-            for p in type(self.model).inner_params(self.model)
+            for p in self.model.inner_params()
         ]
         self.lr_opt = torch.optim.SGD(self.lrs, lr=self.config.lr_lr)
 
