@@ -16,6 +16,7 @@ import higher
 
 import utils
 from data_process import TorchDataset
+from masked_lm.data import MaskedLMDataloader
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -60,7 +61,7 @@ def getT5IndexedProbs(model, index, gold_tokens, sent_tokens, labels):
     with torch.no_grad():
         output = model(input_ids=sent_tokens, labels=labels)
         output_lps = F.log_softmax(output.logits, dim=-1)
-        logits = output_lps[:,list(range(1, (output_lps.shape[1] - 2))),:].detach().cpu().squeeze(0) #squeeze batch size
+        logits = output_lps.detach().cpu().squeeze(0) #squeeze batch size
         
         gold_tokens = gold_tokens.flatten().unsqueeze_(1)
         logit_sum = torch.sum(logits.gather(1, gold_tokens))
@@ -497,6 +498,7 @@ if __name__ == "__main__":
     parser.add_argument('--model_path', help='')
     parser.add_argument('--test_set', action='store_true')
     parser.add_argument('--self_sample', action='store_true')
+    parser.add_argument('--self_sample_masked', action='store_true')    
     parser.add_argument('--split_params', action='store_true')
     parser.add_argument('--edit_steps', default=5, type=int)
     parser.add_argument('--seq_edits', default=1, type=int)
@@ -506,19 +508,22 @@ if __name__ == "__main__":
     loc = utils.sailPreprocess()
 
     if args.model_path: 
-        model, tokenizer = utils.loadTrainedModel(args.model_path, cache_dir=loc,
+        name = 't5-small' if args.self_sample_masked else 'gpt2'
+        print(f"Using model {name}")
+        model, tokenizer = utils.loadTrainedModel(args.model_path, name=name, cache_dir=loc,
                                                   split_params=args.split_params)
 
     ds = 'test' if args.test_set else 'validation'
-    dataloader = utils.retrieveEditDataloader(
-        tokenizer,
-        bs=1,
-        data_loc=loc,
-        dataset=ds,
-        self_sample=args.self_sample
-    )
+    
 
     if args.self_sample:
+        dataloader = utils.retrieveEditDataloader(
+            tokenizer,
+            bs=1,
+            data_loc=loc,
+            dataset=ds,
+            self_sample=args.self_sample
+        )
         evalSelfSample(
             model,
             dataloader,
@@ -529,6 +534,29 @@ if __name__ == "__main__":
             testset=args.test_set,
             copy_to=args.copy_to
             )
+    elif args.self_sample_masked:
+        dataloader = MaskedLMDataloader(
+            'lama',
+            tokenizer,
+            loc=loc,
+            bs=1,
+            pct=30,
+            shuffle=True,
+            mode='editable',
+            inner_loop = 'template'
+        )
+        validation = dataloader.validation
+        evalSelfSample(
+            model,
+            validation,
+            args.model_path, 
+            int(args.edit_steps),
+            seq_edits=args.seq_edits,
+            loc=loc,
+            testset=args.test_set,
+            copy_to=args.copy_to
+            )
+        
     else:
          evalEditable(
             model,

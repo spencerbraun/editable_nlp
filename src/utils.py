@@ -231,7 +231,7 @@ def loadTrainedModel(
     model, tok = loadOTSModel(name=name, cache_dir=cache_dir)
     prep_for_maml(model, adapt_all)
     if split_params:
-        split_conv_layers(model)
+        split_conv_layers(model, name)
         
     model.load_state_dict(torch.load(modelPath))
     model.eval()

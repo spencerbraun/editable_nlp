@@ -146,7 +146,8 @@ class EditTrainer(BaseTrainer):
         self.val_iter = 0
 
         self.model = utils.loadTrainedModel(
-            f"{self.config.write_loc}/models/finetune/{self.config.ft_model_name}", 
+            "/juice/scr/spencerb/editable_nlp/models/finetune/T5_finetune_epoch0_ts20000.20210505.09.05.1620232583",
+            #f"{self.config.write_loc}/models/finetune/{self.config.ft_model_name}", 
             name=self.model_name,
             cache_dir=self.config.write_loc,
             tokenizer=False
@@ -469,11 +470,12 @@ class SelfSampleTrainer(EditTrainer):
         special_obj  = torch.tensor([32099, 32098, 1])
 
         labels = labels.flatten().unsqueeze(0)
-        idx = np.setxor1d(list(range(labels.cpu().shape[1])), find(labels.cpu(), special_obj)[1])
-        gold_tokens = labels[:,idx]
+#         idx = np.setxor1d(list(range(labels.cpu().shape[1])), find(labels.cpu(), special_obj)[1])
+        gold_tokens = labels#[:,idx]
         
-        edit_start = utils.locateSubset(tokens, torch.tensor([32099]))
-        edit_locs = torch.tensor([edit_start + i for i in range(gold_tokens.flatten().size()[0])])
+#         edit_start = utils.locateSubset(tokens, torch.tensor([32099]))
+#         edit_locs = torch.tensor([edit_start + i for i in range(gold_tokens.flatten().size()[0])])
+        edit_locs = None
 
         return edit_locs, gold_tokens.cpu()
 
