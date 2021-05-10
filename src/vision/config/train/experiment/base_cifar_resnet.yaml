@@ -3,7 +3,6 @@
 task: finetune
 model: resnet18
 pretrained: False
-model_path: '???'
 dataset: cifar10
 num_classes: 10
 bs: 128
@@ -13,3 +12,4 @@ outer_lr: 0.001
 epochs: 200
 
 learnable_lr: False
+split_params: False

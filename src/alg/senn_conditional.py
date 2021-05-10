@@ -17,11 +17,11 @@ class ConditionalLinearWrapper(nn.Module):
     ):
         def _recursive_apply(module: nn.Module):
             n_wrapped = 0
+            nonlocal n_hidden
             for idx, (name, mod) in enumerate(module.named_children()):
                 if predicate(mod):
-                    if isinstance(n_hidden, Callable):
-                        n_hidden = n_hidden(mod)
-                    setattr(module, name, ConditionalLinearWrapper(mod, n_hidden, dim))
+                    num_hidden = n_hidden(mod) if isinstance(n_hidden, Callable) else n_hidden
+                    setattr(module, name, ConditionalLinearWrapper(mod, num_hidden, dim))
                     n_wrapped += 1
                 else:
                     n_wrapped += _recursive_apply(mod)
@@ -95,11 +95,15 @@ class ConditionalLinearWrapper(nn.Module):
     def forward(self, x):
         out = self.wrapped(x)
         if self.active:
-            out = (
-                (out.movedim(self.dim, -1) @ self.weight)
-                .movedim(-1, self.dim)
-                .contiguous()
-            )
+            try:
+                out = (
+                    (out.movedim(self.dim, -1) @ self.weight)
+                    .movedim(-1, self.dim)
+                    .contiguous()
+                )
+            except Exception as e:
+                print(e)
+                breakpoint()
 
         return out
 

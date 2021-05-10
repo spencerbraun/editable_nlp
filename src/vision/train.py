@@ -10,7 +10,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.autograd as A
 from torch.utils.data import DataLoader, RandomSampler, Subset, random_split
+import torchvision
 from torchvision.models import resnet18, densenet169
 import higher
 
@@ -41,15 +43,13 @@ class BaseTrainer:
 
         load_model = densenet169 if config.model == 'densenet169' else resnet18
         self.model = utils.loadOTSModel(load_model, num_classes, self.config.pretrained)
-        if not self.config.pretrained and not OmegaConf.is_missing(self.config, 'model_path'):
+        if not self.config.pretrained and self.config.model_path:
             model_path = os.path.join(self.config.write_loc, self.config.model_path)
             self.model.load_state_dict(torch.load(model_path))
             print(f"Loaded model weights from {model_path}")
         self.original_model = copy.deepcopy(self.model)
 
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.model.to(self.device)
-        self.original_model.to(self.device)
 
         # outfiles
         self.timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
@@ -97,23 +97,25 @@ class BaseTrainer:
         self.train_set = train_set
         self.val_set = val_set
 
-    def compute_base_loss(self, inputs, labels):
+    def compute_base_loss(self, model, inputs, labels):
         if self.config.loss == 'cross_entropy':
-            logits = self.model(inputs)
+            logits = model(inputs)
             loss = F.cross_entropy(logits, labels)
 
         elif self.config.loss == 'kl':
-            logits = self.model(inputs)
+            logits = model(inputs)
             self.original_model.eval()
+            self.original_model.to(self.device)
             with torch.no_grad():
                 orig_logits = self.original_model(inputs)
 
             loss = (
-                F.softmax(logits, dim=-1) *
+                logits.softmax(-1) * 
                 (
-                    F.log_softmax(logits, dim=-1) - 
-                    F.log_softmax(orig_logits, dim=-1)
-                )).sum(-1).mean()
+                    logits.log_softmax(-1) - 
+                    orig_logits.log_softmax(-1)
+                )
+            ).sum(-1).mean()
 
         return loss, logits
 
@@ -124,7 +126,7 @@ class BaseTrainer:
         self.model.train()
         self.opt.zero_grad()
 
-        loss, logits = self.compute_base_loss(inputs, labels)
+        loss, logits = self.compute_base_loss(self.model, inputs, labels)
         acc1, acc5 = accuracy(logits, labels, topk=(1,5))
         loss.backward()
         self.opt.step()
@@ -158,7 +160,7 @@ class BaseTrainer:
             inputs = inputs.to(self.device)
             labels = labels.to(self.device)
 
-            loss, logits = self.compute_base_loss(inputs, labels)
+            loss, logits = self.compute_base_loss(self.model, inputs, labels)
             acc1, acc5 = accuracy(logits, labels, topk=(1, 5))
 
         print('Epoch {} Validation\tLoss: {:.2f}\tTop-1 acc: {:.2f}\tTop-5 acc: {:.2f}'.format(
@@ -181,6 +183,7 @@ class BaseTrainer:
         self.scheduler = None
 
         self.model.train()
+        self.model.to(self.device)
         self.global_iter = 0
         train_loader = DataLoader(self.train_set, batch_size=self.config.bs, shuffle=True, num_workers=2)
 
@@ -235,7 +238,7 @@ class EditTrainer(BaseTrainer):
         if config.split_params:
             basic_block_predicate = lambda m: isinstance(m, torchvision.models.resnet.BasicBlock)
             n_hidden = lambda m: m.conv2.weight.shape[0]
-            ConditionalLinearWrapper.wrap_model(model, n_hidden, -1, basic_block_predicate)
+            ConditionalLinearWrapper.wrap_model(self.model, n_hidden, -3, basic_block_predicate)
 
 
     def configure_data(self, train_set, val_set):
@@ -244,55 +247,90 @@ class EditTrainer(BaseTrainer):
         self.train_set, train_edit_data = random_split(train_set, [len(train_set) - n_train_edit_examples, n_train_edit_examples])
         self.val_set, val_edit_data = random_split(val_set, [len(val_set) - n_val_edit_examples, n_val_edit_examples])
 
-        self.train_edit_gen = editGenerator(train_edit_data, self.config.n_edits)
-        self.val_edit_gen = editGenerator(val_edit_data, self.config.n_edits)
+        self.train_edit_gen = editGenerator(train_edit_data, self.config.edit_bs)
+        self.val_edit_gen = editGenerator(val_edit_data, self.config.edit_bs)
+
 
     def train_step(self, inputs, labels):
         base_inputs, loc_inputs = torch.split(inputs, [(inputs.shape[0] + 1) // 2, inputs.shape[0] // 2])
         base_labels, loc_labels = torch.split(labels, [(labels.shape[0] + 1) // 2, labels.shape[0] // 2])
-        edit_inputs, edit_labels = next(self.train_edit_gen)
 
         base_inputs, base_labels = base_inputs.to(self.device), base_labels.to(self.device)
         loc_inputs, loc_labels = loc_inputs.to(self.device), loc_labels.to(self.device)
-        edit_inputs, edit_labels = edit_inputs.to(self.device), edit_labels.to(self.device)
 
         self.model.train()
         self.opt.zero_grad()
         if self.config.learnable_lr:
             self.lr_opt.zero_grad()
 
-        total_loss = 0.0
+        sum_l_edit = 0.0
+        sum_l_loc = 0.0
 
-        l_base, base_logits = self.compute_base_loss(base_inputs, base_labels)
+        # Cache the current params and grads since we're going to modify the model during
+        #  the edit process
+        p_cache = {}
+        for n, p in self.model.named_parameters():
+            p_cache[n] = p.data.detach().clone()
+
+        for edit_example_idx in range(self.config.n_edits):
+            edit_inputs, edit_labels = next(self.train_edit_gen)
+            edit_inputs, edit_labels = edit_inputs.to(self.device), edit_labels.to(self.device)
+
+            model_edited, l_edit, lp_hist, ll_change, edit_success = performEdits(
+                self.model,
+                edit_inputs,
+                edit_labels,
+                n_edit_steps=self.config.n_edit_steps,
+                lrs=self.lrs,
+                default_lr=self.config.inner_lr,
+                mode="train",
+                split_params=self.config.split_params
+            )
+            sum_l_edit += l_edit.item() / self.config.n_edits
+
+            with torch.no_grad():
+                loc_logits = self.model(loc_inputs)
+            edited_loc_logits = model_edited(loc_inputs)
+
+            l_loc = (
+                loc_logits.softmax(-1).detach() * (
+                    loc_logits.log_softmax(-1).detach() -
+                    edited_loc_logits.log_softmax(-1)
+                )
+            ).sum(-1).mean()
+            sum_l_loc += l_loc.item() / self.config.n_edits
+
+            total_edit_loss = (
+                self.config.cloc * l_loc  + 
+                self.config.cedit * l_edit
+            ) / self.config.n_edits
+
+            if not self.config.split_params:
+                total_edit_loss.backward()
+            else:
+                # Only train phi/lrs using edit loss, not theta
+                edit_params = self.model.phi() + self.lrs
+                for p, g in zip(edit_params, A.grad(total_edit_loss, edit_params)):
+                    if p.grad is not None:
+                        p.grad += g
+                    else:
+                        p.grad = g.clone()
+            
+            for fp, p in zip(model_edited.parameters(), self.model.parameters()):
+                p.data = fp.data.detach()
+            
+            # It only makes sense to train more than one edit if we've split the params
+            if not self.config.split_params:
+                break
+
+        # restore pre-edit parameters without overwriting the gradients we just computed
+        for n, p in self.model.named_parameters():
+            p.data = p_cache[n]
+
+        # Compute base loss
+        l_base, base_logits = self.compute_base_loss(self.model, base_inputs, base_labels)
         acc1_pre, acc5_pre = accuracy(base_logits, base_labels, topk=(1,5))
         l_base.backward()
-        total_loss += l_base.item()
-
-        model_edited, l_edit, lp_hist, ll_change, edit_success = performEdits(
-            self.model,
-            edit_inputs,
-            edit_labels,
-            n_edit_steps=self.config.n_edit_steps,
-            lrs=self.lrs,
-            default_lr=self.config.inner_lr,
-            mode="train"
-        )
-
-        loc_logits = self.model(loc_inputs)
-        edited_loc_logits = model_edited(loc_inputs)
-        l_loc = (
-            F.softmax(loc_logits.detach(), dim=-1) *
-            (
-                F.log_softmax(loc_logits.detach(), dim=-1) - 
-                F.log_softmax(edited_loc_logits, dim=-1)
-            )).sum(-1).mean()
-
-        total_edit_loss = (
-            self.config.cloc * l_loc  + 
-            self.config.cedit * l_edit
-        )
-        total_edit_loss.backward()
-        total_loss += total_edit_loss.item()
 
         edited_base_logits = model_edited(base_inputs)
         acc1_post, acc5_post = accuracy(edited_base_logits, base_labels, topk=(1,5))
@@ -301,6 +339,7 @@ class EditTrainer(BaseTrainer):
         if self.config.learnable_lr:
             self.lr_opt.step()
 
+        total_loss = (l_base + self.config.cloc * sum_l_loc + self.config.cedit * sum_l_edit).item()
         print('Train step {}\tLoss: {:.2f}\tEdit success: {:.2f}\tPre-edit top-1 acc: {:.2f}\tPost-edit top-1 acc: {:.2f}\t' \
                 'Pre-edit top-5 acc: {:.2f}\tPost-edit top-5 acc: {:.2f}'.format(
                 self.global_iter, total_loss, edit_success, acc1_pre, acc1_post, acc5_pre, acc5_post))
@@ -309,8 +348,8 @@ class EditTrainer(BaseTrainer):
             wandb.log({
                 'step': self.global_iter,
                 'loss/base': l_base,
-                'loss/edit': l_edit,
-                'loss/loc': l_loc,
+                'loss/edit': sum_l_edit,
+                'loss/loc': sum_l_loc,
                 'loss/train': total_loss,
                 'edit_success_train': edit_success,
                 'acc/top1_pre_train': acc1_pre,
@@ -343,7 +382,7 @@ class EditTrainer(BaseTrainer):
                 edit_inputs, edit_labels = edit_inputs.to(self.device), edit_labels.to(self.device)
 
                 self.model.eval()
-                l_base, base_logits = self.compute_base_loss(base_inputs, base_labels)
+                l_base, base_logits = self.compute_base_loss(self.model, base_inputs, base_labels)
                 acc1_pre, acc5_pre = accuracy(base_logits, base_labels, topk=(1, 5))
 
                 top1_pre.append(acc1_pre)
@@ -356,7 +395,8 @@ class EditTrainer(BaseTrainer):
                     n_edit_steps=self.config.n_edit_steps,
                     lrs=self.lrs,
                     default_lr=self.config.inner_lr,
-                    mode="val"
+                    mode="val",
+                    split_params=self.config.split_params
                 )
                 ll_changes.append(ll_change)
                 edit_successes.append(edit_success)
@@ -365,11 +405,12 @@ class EditTrainer(BaseTrainer):
                 loc_logits = self.model(loc_inputs)
                 edited_loc_logits = model_edited(loc_inputs)
                 l_loc = (
-                    F.softmax(loc_logits, dim=-1) *
+                    loc_logits.softmax(-1) * 
                     (
-                        F.log_softmax(loc_logits, dim=-1) - 
-                        F.log_softmax(edited_loc_logits, dim=-1)
-                    )).sum(-1).mean()
+                        loc_logits.log_softmax(-1) - 
+                        edited_loc_logits.log_softmax(-1)
+                    )
+                ).sum(-1).mean()
 
                 total_edit_loss = (
                     self.config.cloc * l_loc  + 
@@ -412,6 +453,7 @@ class EditTrainer(BaseTrainer):
         self.lr_opt = torch.optim.SGD(self.lrs, lr=self.config.lr_lr)
 
         self.model.train()
+        self.model.to(self.device)
         self.global_iter = 0
         train_loader = DataLoader(self.train_set, batch_size=2*self.config.bs, shuffle=True, num_workers=2)
 

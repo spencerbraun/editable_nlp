@@ -85,7 +85,16 @@ def editGenerator(dataset, batch_size=1):
             yield inputs, edit_labels
 
 
-def performEdits(model, edit_inputs, edit_labels, n_edit_steps=1, lrs=None, default_lr=1e-5, mode="train"):
+def performEdits(
+    model,
+    edit_inputs,
+    edit_labels,
+    n_edit_steps=1,
+    lrs=None,
+    default_lr=1e-5,
+    mode="train",
+    split_params=False
+):
     lp_hist = []
     l_edit, ll_change, edit_success = 0.0, 0.0, 0.0
 
@@ -114,8 +123,12 @@ def performEdits(model, edit_inputs, edit_labels, n_edit_steps=1, lrs=None, defa
         ) as (fmodel, diffopt):
             for edit_step in range(n_edit_steps):
                 fmodel.eval()  # needed for batchnorm to work properly on batch size of 1
+                if split_params:
+                    fmodel.set_editing(True)
                 edit_logits = fmodel(edit_inputs)
                 loss = F.cross_entropy(edit_logits, edit_labels)
+                if split_params:
+                    fmodel.set_editing(False)
                 diffopt.step(loss)
 
                 lp = get_logprobs(fmodel, edit_inputs, edit_labels)
@@ -130,7 +143,13 @@ def performEdits(model, edit_inputs, edit_labels, n_edit_steps=1, lrs=None, defa
     print("Edit step {}\tMean ll change {:.2f}\tMean log prob {:.2f}\tLoss {:.2f}".format(
             edit_step, ll_change.mean().item(), lp_hist[-1].mean().item(), l_edit))
 
-    return fmodel, l_edit, lp_hist, ll_change, edit_success
+    if mode == 'train':
+        model_edited = fmodel
+    else:
+        model_edited = copy.deepcopy(model)
+        model_edited.load_state_dict(fmodel.state_dict())
+
+    return model_edited, l_edit, lp_hist, ll_change, edit_success
 
 def evaluateOnDataset(model, dataset):
     dataloader = DataLoader(dataset, batch_size=100, shuffle=True, num_workers=2)
@@ -212,18 +231,20 @@ def evalEditable(
                 n_edit_steps=config.n_edit_steps,
                 lrs=lrs,
                 default_lr=1e-3,
-                mode="val"
+                mode="val",
+                split_params=self.config.split_params
             )
 
             model_edited.eval()
             loc_logits = model(loc_inputs)
             edited_loc_logits = model_edited(loc_inputs)
             l_loc = (
-                F.softmax(loc_logits, dim=-1) *
+                loc_logits.softmax(-1) * 
                 (
-                    F.log_softmax(loc_logits, dim=-1) - 
-                    F.log_softmax(edited_loc_logits, dim=-1)
-                )).sum(-1).mean()
+                    loc_logits.log_softmax(-1) - 
+                    edited_loc_logits.log_softmax(-1)
+                )
+            ).sum(-1).mean()
 
             total_edit_loss = (
                 config.cloc * l_loc  + 
@@ -238,7 +259,7 @@ def evalEditable(
                 orig_acc1 = orig_acc5 = new_acc1 = new_acc5 = ""
 
             norm_diff = orig_params.sub(get_params(model_edited)).norm().item()
-            model.load_state_dict(model_edited.state_dict())
+            model = model_edited
 
             for idx, val in enumerate(lp_hist):
                 run = (
@@ -259,7 +280,7 @@ def evalEditable(
     print(f"Logged to {saveloc}")
 
 
-@hydra.main(config_path='config/eval', config_name='config')
+@hydra.main(config_path='config/evaluate', config_name='config')
 def main(config: DictConfig):
     print(OmegaConf.to_yaml(config))
 

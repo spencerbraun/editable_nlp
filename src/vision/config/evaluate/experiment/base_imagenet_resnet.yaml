@@ -1,0 +1,8 @@
+# @package _global_
+
+dataset: imagenet
+model: resnet18
+pretrained: True
+model_path: '???'
+n_edit_steps: 10
+seq_edits: 100

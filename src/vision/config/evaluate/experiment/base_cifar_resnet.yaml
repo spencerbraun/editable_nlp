@@ -1,0 +1,13 @@
+# @package _global_
+
+dataset: cifar10
+model: resnet18
+pretrained: False
+model_path: models/cifar/resnet18/finetune/finetune_epoch199_ts9999.20210429.19.04.1619750982
+
+n_edit_steps: 5
+edit_bs: 16
+seq_edits: 200
+
+cedit: 0.1
+cloc: 1
