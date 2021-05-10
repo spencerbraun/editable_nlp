@@ -32,7 +32,7 @@ class EditConfig:
 
 class SelfSampleGPT2Config:
     def __init__(self):
-        self.task = 'gpt2_self_sample'
+        self.task = 'gpt2_gen'
         self.model_name = 'gpt2'
         self.inner_lr = 1e-2
         self.outer_lr = 1e-5
@@ -54,7 +54,7 @@ class SelfSampleGPT2Config:
         
 class T5Config:
     def __init__(self):
-        self.task = 't5_self_sample'
+        self.task = 't5_lama'
         self.model_name = 't5-small' #t5-small or gpt2
         self.inner_loop = 'template' #sentence, template, or random
         self.max_val_len = 2000

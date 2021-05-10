@@ -2,6 +2,7 @@ import random
 import copy 
 import argparse
 import os
+import re
 import shutil
 from datetime import datetime
 
@@ -13,6 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import higher
+from torch.utils.data import Subset
 
 import utils
 from data_process import TorchDataset
@@ -28,28 +30,32 @@ def get_params(model):
     return torch.cat([p.view(-1) for p in model.parameters()])
 
 def processLAMABatch(tokens, mask, label):
-    return (tokens.to(self.device), mask.to(self.device), 
-            label.masked_fill(label == self.tokenizer.pad_token_id, -100).to(self.device))
+    return (tokens.to(DEVICE), mask.to(DEVICE), 
+            label.masked_fill(label == 0, -100).to(DEVICE))
 
-def perplexity(model, dataloader, lama=False):
+def perplexity(model, dataloader, lama=False, iteration=0):
     model.to(DEVICE)
     model.eval()
     acc = utils.NLLAccumulator()
+
+    indices = np.random.default_rng(iteration).choice(len(dataloader), 200, replace=False)
+    subset = Subset(dataloader, indices)
+    dataset = dataloader if not lama else subset
     with torch.no_grad():
         for batch_idx, batch in enumerate(dataset):
             if lama:
                 lm_tokens, lm_mask, lm_labels = processLAMABatch(
-                    batch[0], batch[1], batch[2] if self.model_name == 't5-small' else None
+                    batch[0], batch[1], batch[2]
                     )
                 loss = model(lm_tokens, labels=lm_labels).loss
-                acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels))
+                acc.update(loss.item(), lm_labels.shape[-1])
             else:
                 lm_data = batch[0]
                 lm_tokens, lm_mask = lm_data[0]
                 lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
                 lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
-    loss = model(lm_tokens, labels=lm_labels).loss
-    acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels))
+                loss = model(lm_tokens, labels=lm_labels).loss
+                acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels))
 
     avg_loss, ppl = acc.get_metrics()
     return torch.tensor(ppl)
@@ -75,7 +81,7 @@ def getT5IndexedProbs(model, index, gold_tokens, sent_tokens, labels):
         output_lps = F.log_softmax(output.logits, dim=-1)
         logits = output_lps.detach().cpu().squeeze(0) #squeeze batch size
         
-        gold_tokens = gold_tokens.flatten().unsqueeze_(1)
+        gold_tokens = gold_tokens.flatten().unsqueeze_(1).cpu()
         logit_sum = torch.sum(logits.gather(1, gold_tokens))
 
     return logit_sum
@@ -83,10 +89,10 @@ def getT5IndexedProbs(model, index, gold_tokens, sent_tokens, labels):
 def loadLr(model_path):
     model_name = os.path.basename(model_path)
     model_id = model_name.split(".")[-1]
-    step = model_name.split("_")[-1].split(".")[0]
+    step = re.search('ts.*\.', model_name).group(0)[:-1]
     dir_loc = os.path.dirname(model_path)
     lr_glob = glob.glob(f"{dir_loc}/lr_epoch0_{step}.*{model_id}")
-
+    
     if len(lr_glob) > 1:
         raise AttributeError("Too many lr specifications", ",".join(lr_glob))
     elif len(lr_glob) == 0:
@@ -285,12 +291,11 @@ def processBatch(batch, lama=False):
         ) = batch
         edit_template = edit_template[:1]
         edit_temp_mask = edit_temp_mask[:1]
-        edit_template, edit_temp_mask, _ = self.strip_padding(edit_tokens, edit_mask, edit_labels)
-        if edit_tokens.shape[-1] > 500:
-            print(f"Sequence {batch_idx} too long: Skipping...")
-            continue
-        edit_locs, gold_tokens = 0, labels.flatten().unsqueeze(0)
-        edit_package = (edit_tokens, edit_mask, edit_labels, edit_template, edit_temp_mask, edit_labels)
+        edit_locs, gold_tokens = 0, edit_labels.flatten().unsqueeze(0).cpu()
+        edit_package = (
+            edit_tokens.to(DEVICE), edit_mask.to(DEVICE), edit_labels.to(DEVICE), 
+            edit_template.to(DEVICE), edit_temp_mask.to(DEVICE), edit_labels.to(DEVICE)
+        )
     else:
         (lm_data, edit_example, _, _) = batch
         lm_tokens, lm_mask = lm_data[0]
@@ -340,7 +345,7 @@ def evalSelfSample(
     except AttributeError:
         print("No learning rates found!")
         lrs = []
-    
+        
     n_edits = 0
     edit_number = 0
     model_number = 0
@@ -361,7 +366,9 @@ def evalSelfSample(
             print(f"Edit number {edit_number}")
             print(f"Model number {model_number}")
             edit_package, edit_locs, gold_tokens = processBatch(batch, lama=lama)
-            
+            if edit_package[0].shape[-1] > 500:
+                print(f"Sequence {train_step} too long: Skipping...")
+                continue
             model_edited, logit_hist, ll_change, loss = performOneEdit(
                 model_edited,
                 't5-small' if lama else 'gpt2',
@@ -373,7 +380,7 @@ def evalSelfSample(
             )
 
             if (edit_number + 1) % 20 == 0:
-                new_ppl = perplexity(model_edited, dataloader, lama=lama)
+                new_ppl = perplexity(model_edited, dataloader, lama=lama, iteration=n_edits)
             else:
                 new_ppl = ""
 

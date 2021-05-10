@@ -42,9 +42,10 @@ class BaseTrainer:
         self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.hyperspath = f"{self.model_dir}/hypers.{self.timestamp}"
         self.errpath = f"{self.config.write_loc}/errors/errors_{self.timestamp}"
+        split = '_split' if self.config.split_params else ''
         self.statepath = (
             lambda model, epoch, step: 
-            f"{self.model_dir}/{model}_epoch{epoch}_ts{step}.{self.timestamp}"
+            f"{self.model_dir}/{model}{split}_epoch{epoch}_ts{step}.{self.timestamp}"
             )
 
         self.data = dataloader
@@ -459,7 +460,7 @@ class SelfSampleTrainer(EditTrainer):
                     edit_locs, gold_tokens = self.get_edit_locs(edit_tokens, edit_labels)
                     edit_package = (edit_tokens, edit_mask, edit_labels)
                 elif self.model_name == 't5-small':
-                    edit_locs, gold_tokens = 0, labels.flatten().unsqueeze(0)
+                    edit_locs, gold_tokens = 0, edit_labels.flatten().unsqueeze(0)
                     edit_package = (edit_tokens, edit_mask, edit_labels, edit_template, edit_temp_mask, edit_labels)
 
                 start = time.time()
@@ -666,7 +667,7 @@ class SelfSampleTrainer(EditTrainer):
                 self.echo(train_step, **info_dict)
                 info_dict.update({f"lr/lr{i}":lr.data.item() for i, lr in enumerate(self.lrs)})
                 self.wandb_log(global_iter, info_dict)
-                self.saveState(self.model, global_iter, name="self_sample")
+                self.saveState(self.model, global_iter, name=self.config.task)
                 if self.config.learnable_lr:
                     self.saveState(self.lrs, global_iter, name='lr')
                 if global_iter >= self.config.max_iter:
@@ -685,7 +686,7 @@ class SelfSampleTrainer(EditTrainer):
                 if (train_step % self.config.val_interval == 0) and (not self.config.debug):
                     self.validateSelfSampleTraining()
         
-        self.saveState(self.model, global_iter, final=True, name="self_sample")
+        self.saveState(self.model, global_iter, final=True, name=self.config.task)
         if self.config.learnable_lr:
             self.saveState(self.lrs, global_iter, final=True, name='lr')
             
@@ -696,7 +697,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_edits', type=int, default=1)
     parser.add_argument('--split_params', action='store_true')
     parser.add_argument('--finetune', action='store_true')
-    parser.add_argument('--self_sample', action='store_true')
+    parser.add_argument('--gen', action='store_true')
     parser.add_argument('--lama', action='store_true')
     parser.add_argument('--bs', default=1, type=int)
     parser.add_argument('--debug', action='store_true')
@@ -705,13 +706,13 @@ if __name__ == "__main__":
     
     loc = utils.sailPreprocess()
     tokenizer = utils.loadTokenizer(
-        name= 'gpt2' if not args.self_sample_masked else 't5-small',
+        name= 'gpt2' if not args.lama else 't5-small',
         cache_dir=loc)
     
     config = (
         TrainConfig() if args.finetune else
         EditConfig() if args.editable else
-        SelfSampleGPT2Config() if args.self_sample else
+        SelfSampleGPT2Config() if args.gen else
         T5Config() 
     )
     config.write_loc = loc
@@ -721,7 +722,7 @@ if __name__ == "__main__":
     config.debug = args.debug if args.debug else config.debug
     config.val_interval = args.val_interval
 
-    if (args.editable or args.self_sample):
+    if (args.editable or args.gen):
         train = utils.retrieveUnifiedDataset(
             tokenizer,
             data_loc=config.write_loc,
@@ -784,7 +785,7 @@ if __name__ == "__main__":
     elif args.finetune:
         trainer = BaseTrainer(config, dataloader)
     
-    elif (args.self_sample or args.self_sample_masked):
+    elif (args.gen or args.lama):
         trainer = SelfSampleTrainer(config, train, validation, tokenizer)   
     
     else:
