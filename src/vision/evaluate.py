@@ -16,8 +16,8 @@ from torch.utils.data import DataLoader, RandomSampler, random_split
 from torchvision.models import resnet18, densenet169
 import higher
 
-from data_process import loadCIFAR, loadImageNet
-import utils
+from vision.data_process import loadCIFAR, loadImageNet
+import vision.utils as utils
 
 eps = np.finfo(np.float32).eps.item()
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'

@@ -4,7 +4,7 @@ import argparse
 import torch
 from torchvision import datasets, transforms as T
 
-import utils
+import vision.utils
 
 
 def loadCIFAR(root='../..', split='train'):

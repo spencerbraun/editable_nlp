@@ -18,9 +18,10 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 import hydra
 
 import wandb
-import utils
-from data_process import loadCIFAR, loadImageNet
-from evaluate import accuracy, get_logprobs, editGenerator, performEdits
+import vision.utils as utils
+from vision.data_process import loadCIFAR, loadImageNet
+from vision.evaluate import accuracy, get_logprobs, editGenerator, performEdits
+from alg.senn_conditional import ConditionalLinearWrapper
 
 eps = np.finfo(np.float32).eps.item()
 
@@ -230,6 +231,12 @@ class EditTrainer(BaseTrainer):
             utils.prep_resnet_for_maml(self.model)
         elif self.config.model == 'densenet169':
             utils.prep_densenet_for_maml(self.model)
+
+        if config.split_params:
+            basic_block_predicate = lambda m: isinstance(m, torchvision.models.resnet.BasicBlock)
+            n_hidden = lambda m: m.conv2.weight.shape[0]
+            ConditionalLinearWrapper.wrap_model(model, n_hidden, -1, basic_block_predicate)
+
 
     def configure_data(self, train_set, val_set):
         n_train_edit_examples = len(train_set) // 10

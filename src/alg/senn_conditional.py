@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from typing import Callable, List
+from typing import Callable, List, Union
 
 
 def filter_inner_params(params: List[nn.Parameter]):
@@ -11,7 +11,7 @@ class ConditionalLinearWrapper(nn.Module):
     @staticmethod
     def wrap_model(
         model: nn.Module,
-        n_hidden: int,
+        n_hidden: Union[int, Callable],
         dim: int,
         predicate: Callable[[nn.Module], bool],
     ):
@@ -19,6 +19,8 @@ class ConditionalLinearWrapper(nn.Module):
             n_wrapped = 0
             for idx, (name, mod) in enumerate(module.named_children()):
                 if predicate(mod):
+                    if isinstance(n_hidden, Callable):
+                        n_hidden = n_hidden(mod)
                     setattr(module, name, ConditionalLinearWrapper(mod, n_hidden, dim))
                     n_wrapped += 1
                 else:
