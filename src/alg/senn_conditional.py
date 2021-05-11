@@ -17,7 +17,6 @@ class ConditionalLinearWrapper(nn.Module):
     ):
         def _recursive_apply(module: nn.Module):
             n_wrapped = 0
-            nonlocal n_hidden
             for idx, (name, mod) in enumerate(module.named_children()):
                 if predicate(mod):
                     num_hidden = n_hidden(mod) if isinstance(n_hidden, Callable) else n_hidden

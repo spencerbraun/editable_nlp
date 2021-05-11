@@ -1,4 +1,4 @@
-debug: False
+debug: True
 model_save_pt: 1000
 silent: False
 model_path: null

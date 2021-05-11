@@ -7,9 +7,9 @@ dataset: imagenet
 num_classes: 1000
 bs: 128
 
-epochs: 2
+epochs: 1
 loss: kl
-outer_lr: 1.0e-6
+outer_lr: 1.0e-5
 inner_lr: 5.0e-6
 n_edit_steps: 1
 edit_bs: 16

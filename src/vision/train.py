@@ -318,7 +318,7 @@ class EditTrainer(BaseTrainer):
             
             for fp, p in zip(model_edited.parameters(), self.model.parameters()):
                 p.data = fp.data.detach()
-            
+
             # It only makes sense to train more than one edit if we've split the params
             if not self.config.split_params:
                 break
@@ -335,6 +335,7 @@ class EditTrainer(BaseTrainer):
         edited_base_logits = model_edited(base_inputs)
         acc1_post, acc5_post = accuracy(edited_base_logits, base_labels, topk=(1,5))
 
+        nn.utils.clip_grad_value_(self.model.parameters(), 10)
         self.opt.step()
         if self.config.learnable_lr:
             self.lr_opt.step()
