@@ -44,7 +44,7 @@ class SelfSampleGPT2Config:
         self.learnable_lr = True
         self.lr_lr = 1e-3
 
-        self.debug = True
+        self.debug = False
         self.model_save_pt = 5000
         self.write_loc = '..'
         self.ft_model_name = "gpt2_epoch0_ts10000.20210408.09.04.1617899457"
