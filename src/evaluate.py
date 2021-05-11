@@ -33,6 +33,17 @@ def processLAMABatch(tokens, mask, label):
     return (tokens.to(DEVICE), mask.to(DEVICE), 
             label.masked_fill(label == 0, -100).to(DEVICE))
 
+def strip_padding(tokens, mask, labels):
+    mask_ = tokens != 0
+    tokens = tokens[mask_].unsqueeze(0)
+    mask = mask[mask_].unsqueeze(0)
+    
+    label_mask = labels != 0
+    labels = labels[label_mask].unsqueeze(0)
+
+    return tokens, mask, labels
+
+
 def perplexity(model, dataloader, lama=False, iteration=0):
     model.to(DEVICE)
     model.eval()
@@ -48,7 +59,7 @@ def perplexity(model, dataloader, lama=False, iteration=0):
                     batch[0], batch[1], batch[2]
                     )
                 loss = model(lm_tokens, labels=lm_labels).loss
-                acc.update(loss.item(), lm_labels.shape[-1])
+                acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels, offset=0))
             else:
                 lm_data = batch[0]
                 lm_tokens, lm_mask = lm_data[0]
@@ -90,9 +101,10 @@ def loadLr(model_path):
     model_name = os.path.basename(model_path)
     model_id = model_name.split(".")[-1]
     step = re.search('ts.*\.', model_name).group(0)[:-1]
+    split = '_split' if 'split' in model_name else ''
     dir_loc = os.path.dirname(model_path)
-    lr_glob = glob.glob(f"{dir_loc}/lr_epoch0_{step}.*{model_id}")
-    
+    lr_glob = glob.glob(f"{dir_loc}/lr{split}_epoch0_{step}.{model_id}")
+
     if len(lr_glob) > 1:
         raise AttributeError("Too many lr specifications", ",".join(lr_glob))
     elif len(lr_glob) == 0:
@@ -289,9 +301,15 @@ def processBatch(batch, lama=False):
             edit_tokens, edit_mask, edit_labels,
             edit_template, edit_temp_mask, edit_labels
         ) = batch
+        
         edit_template = edit_template[:1]
         edit_temp_mask = edit_temp_mask[:1]
+      
+        edit_tokens, edit_mask, _ = strip_padding(edit_tokens, edit_mask, edit_labels)
+        edit_template, edit_temp_mask, edit_labels = strip_padding(edit_template, edit_temp_mask, edit_labels)
+        
         edit_locs, gold_tokens = 0, edit_labels.flatten().unsqueeze(0).cpu()
+        
         edit_package = (
             edit_tokens.to(DEVICE), edit_mask.to(DEVICE), edit_labels.to(DEVICE), 
             edit_template.to(DEVICE), edit_temp_mask.to(DEVICE), edit_labels.to(DEVICE)
@@ -366,9 +384,7 @@ def evalSelfSample(
             print(f"Edit number {edit_number}")
             print(f"Model number {model_number}")
             edit_package, edit_locs, gold_tokens = processBatch(batch, lama=lama)
-            if (edit_package[0].shape[-1] > 500) and lama:
-                print(f"Sequence {train_step} too long: Skipping...")
-                continue
+
             model_edited, logit_hist, ll_change, loss = performOneEdit(
                 model_edited,
                 't5-small' if lama else 'gpt2',
@@ -583,10 +599,11 @@ if __name__ == "__main__":
             tokenizer,
             loc=loc,
             bs=1,
-            pct=30,
+            pct=40,
             shuffle=True,
             mode='editable',
-            inner_loop = 'template'
+            inner_loop='template',
+            n_edits=1
         )
         validation = dataloader.validation
         evalSelfSample(

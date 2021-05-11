@@ -28,11 +28,11 @@ class NLLAccumulator(object):
         return avg, math.e ** avg
 
     @staticmethod
-    def n_predictions_for_labels(labels):
+    def n_predictions_for_labels(labels, offset=1):
         if labels.dim() == 1:
-            return (labels[1:] != -100).sum().item()
+            return (labels[offset:] != -100).sum().item()
         elif labels.dim() == 2:
-            return (labels[:, 1:] != -100).sum().item()
+            return (labels[:, offset:] != -100).sum().item()
         else:
             assert False
 

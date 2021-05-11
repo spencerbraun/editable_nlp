@@ -37,6 +37,8 @@ class LAMADataset(torch.utils.data.IterableDataset):
         self.batch_size = batch_size
         self.tokenizer = tokenizer
         
+        self.skip = 0
+        
         self.edit_location = f"{data_loc}/lama_edited_{self.pct}pct.pkl"
         if os.path.exists(self.edit_location):
             print(f"Reusing edited LAMA: {self.edit_location}")
@@ -51,11 +53,12 @@ class LAMADataset(torch.utils.data.IterableDataset):
         self.list_IDs = list(range(len(self.dataset['masked_sentence'])))
                 
 
-    def tokenize(self, text):
+    def tokenize(self, text, max_len):
         tok = self.tokenizer(
             text,       
             truncation=False,
-            padding=True,
+            max_length=max_len,
+            padding="max_length",
             return_tensors='pt'
         )
         return tok["input_ids"], tok["attention_mask"]
@@ -103,11 +106,13 @@ class LAMADataset(torch.utils.data.IterableDataset):
         if kind == 'sentence':
             sentence = self.dataset['masked_sentence'][idx]
             to_return = sentence.replace("[MASK]", "<extra_id_0>")
+            max_len = 200
         elif kind == 'label':
             obj_surface = self.dataset['obj_surface'][idx]
             to_return = f"<extra_id_0> {obj_surface.strip()} <extra_id_1>"
+            max_len = 10
 
-        return self.tokenize(to_return)
+        return self.tokenize(to_return, max_len)
 
     def __iter__(self):
         return (self[idx] for idx in range(len(self)))
@@ -116,61 +121,69 @@ class LAMADataset(torch.utils.data.IterableDataset):
         return len(self.dataset['masked_sentence'])
 
     def __getitem__(self, index):
-        rng = np.random.default_rng(index)
-        edit_idxs = rng.choice(self.list_IDs, self.n_edits, replace=False)
-        loc_idxs = rng.choice(self.list_IDs, self.n_edits, replace=False)
-        base_idxs = rng.choice(self.list_IDs, self.batch_size, replace=False)
         
-        original_sent, edited_sent = [], []
-        original_label, edited_label= [], []
-        for idx in edit_idxs:
-            masked_sent = self.processMasks(idx, 'sentence') 
-            orig_label = self.processMasks(idx, 'label')
-            
-            sub_surface = self.dataset['sub_surface'][idx]
-            template = self.dataset['template'][index]
-            template = template.replace("[X]", sub_surface)
-            masked_template = template.replace("[Y]", "<extra_id_0>")
-            
-            edit_surface = self.dataset['edit_surface'][idx]
-            edit_label = f"<extra_id_0> {edit_surface.strip()} <extra_id_1>"
+        while True:
+            rng = np.random.default_rng(index + self.skip)
+            edit_idxs = rng.choice(self.list_IDs, self.n_edits, replace=False)
+            loc_idxs = rng.choice(self.list_IDs, self.n_edits, replace=False)
+            base_idxs = rng.choice(self.list_IDs, self.batch_size, replace=False)
 
-            original_sent.append(masked_sent)
-            original_label.append(orig_label)
-            edited_sent.append(self.tokenize(masked_template))
-            edited_label.append(self.tokenize(edit_label))
+            original_sent, edited_sent = [], []
+            original_label, edited_label= [], []
+            for idx in edit_idxs:
+                masked_sent = self.processMasks(idx, 'sentence') 
+                orig_label = self.processMasks(idx, 'label')
 
-        original_tokens, original_mask = tuple(zip(*original_sent))
-        edited_tokens, edited_mask = tuple(zip(*edited_sent))
+                sub_surface = self.dataset['sub_surface'][idx]
+                template = self.dataset['template'][index]
+                template = template.replace("[X]", sub_surface)
+                masked_template = template.replace("[Y]", "<extra_id_0>")
 
-        original_labels, original_lab_mask = tuple(zip(*original_label))
-        edited_labels, edited_lab_mask = tuple(zip(*edited_label))
+                edit_surface = self.dataset['edit_surface'][idx]
+                edit_label = f"<extra_id_0> {edit_surface.strip()} <extra_id_1>"
 
-        loc_tokens, loc_mask = tuple(zip(*[
-           self.processMasks(idx, 'sentence') 
-            for idx in loc_idxs
-            ]))
-        loc_labels, loc_lab_mask = tuple(zip(*[
-            self.processMasks(idx, 'label') 
-            for idx in loc_idxs
-            ]))
+                original_sent.append(masked_sent)
+                original_label.append(orig_label)
+                edited_sent.append(self.tokenize(masked_template, 30))
+                edited_label.append(self.tokenize(edit_label, 10))
 
-        base_tokens, base_mask = tuple(zip(*[
-            self.processMasks(idx, 'sentence') 
-            for idx in base_idxs
-            ]))
-        base_labels, base_lab_mask = tuple(zip(*[
-            self.processMasks(idx, 'label') 
-            for idx in base_idxs
-            ]))
+            original_tokens, original_mask = tuple(zip(*original_sent))
+            edited_tokens, edited_mask = tuple(zip(*edited_sent))
 
-        to_return = [
-            base_tokens, base_mask, base_labels, 
-            loc_tokens, loc_mask, loc_labels, 
-            original_tokens, original_mask, edited_labels, #sentence and template labels should be the same
-            edited_tokens, edited_mask, edited_labels
-            ]
-        to_return = [torch.cat(tensors) for tensors in to_return]
+            original_labels, original_lab_mask = tuple(zip(*original_label))
+            edited_labels, edited_lab_mask = tuple(zip(*edited_label))
+
+            loc_tokens, loc_mask = tuple(zip(*[
+               self.processMasks(idx, 'sentence') 
+                for idx in loc_idxs
+                ]))
+            loc_labels, loc_lab_mask = tuple(zip(*[
+                self.processMasks(idx, 'label') 
+                for idx in loc_idxs
+                ]))
+
+            base_tokens, base_mask = tuple(zip(*[
+                self.processMasks(idx, 'sentence') 
+                for idx in base_idxs
+                ]))
+            base_labels, base_lab_mask = tuple(zip(*[
+                self.processMasks(idx, 'label') 
+                for idx in base_idxs
+                ]))
+
+            to_return = [
+                base_tokens, base_mask, base_labels, 
+                loc_tokens, loc_mask, loc_labels, 
+                original_tokens, original_mask, edited_labels, #sentence and template labels should be the same
+                edited_tokens, edited_mask, edited_labels
+                ]
+            try:
+                to_return = [torch.cat(tensors) for tensors in to_return]
+            except RuntimeError:
+                self.skip += 1
+                continue
+                
+            break
         
         if self.mode == 'finetune':
             return masked_sent, orig_label

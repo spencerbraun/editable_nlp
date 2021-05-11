@@ -404,7 +404,8 @@ class SelfSampleTrainer(EditTrainer):
         if mask_.shape == labels.shape:
             labels = labels[mask_].unsqueeze(0)
         else: 
-            labels = labels[torch.ones(labels.shape, dtype=torch.bool)].unsqueeze(0)
+            label_mask = labels != self.tokenizer.pad_token_id
+            labels = labels[label_mask].unsqueeze(0)
 
         return tokens.to(self.device), mask.to(self.device), labels.to(self.device)
 
@@ -443,9 +444,6 @@ class SelfSampleTrainer(EditTrainer):
                     edit_template = edit_template[:1]
                     edit_temp_mask = edit_temp_mask[:1]
                     edit_template, edit_temp_mask, _ = self.strip_padding(edit_template, edit_temp_mask, edit_labels)
-                    if edit_tokens.shape[-1] > 500:
-                        print(f"Sequence {batch_idx} too long: Skipping...")
-                        continue
                     
                 
                 edit_tokens = edit_tokens[:1]
@@ -463,7 +461,7 @@ class SelfSampleTrainer(EditTrainer):
                     edit_package = (edit_tokens, edit_mask, edit_labels, edit_template, edit_temp_mask, edit_labels)
 
                 start = time.time()
-
+                
                 with torch.no_grad():
                     orig_ppl = self.perplexity(self.model, subset)
                 print(ds, batch_idx, time.time() - start)
@@ -534,10 +532,7 @@ class SelfSampleTrainer(EditTrainer):
                     ) = datapack
                     lm_tokens, lm_mask, lm_labels = self.mask_padding(lm_tokens, lm_mask, lm_labels)
                     loc_tokens, loc_mask, loc_labels = self.mask_padding(loc_tokens, loc_mask, loc_labels)
-                    if max(lm_tokens.shape[-1],loc_tokens.shape[-1],edit_tokens.shape[-1]) > 500:
-                        print(f"Sequence {train_step} too long: Skipping...")
-                        continue
-
+        
                 # Cache the current params and grads since we're going to modify the model during
                 #  the edit process
                 p_cache = {}
@@ -556,6 +551,7 @@ class SelfSampleTrainer(EditTrainer):
                                 lr=self.config.inner_lr
                         )
                     )
+
                     with higher.innerloop_ctx(
                             self.model, 
                             inner_opt, 
@@ -571,7 +567,7 @@ class SelfSampleTrainer(EditTrainer):
                         for edit_step in range(self.config.n_edit_steps):
                             if self.config.split_params:
                                 fmodel.set_editing(True)
-
+                                
                             loss = fmodel(
                                 edit_tokens_,
                                 attention_mask=edit_mask_,
@@ -587,7 +583,6 @@ class SelfSampleTrainer(EditTrainer):
                                                edit_temp_mask[edit_example_idx],
                                                edit_labels[edit_example_idx])
                             )
-
                         edit_out = fmodel(
                             edit_tokens_,
                             attention_mask=edit_mask_,
@@ -727,14 +722,16 @@ if __name__ == "__main__":
             data_loc=config.write_loc,
             bs=1,
             dataset='train',
-            self_sample=True
+            self_sample=True,
+            n_edits=args.n_edits
         )
         validation = utils.retrieveUnifiedDataset(
             tokenizer,
             data_loc=config.write_loc,
             bs=1,
             dataset='validation',
-            self_sample=True
+            self_sample=True,
+            n_edits=args.n_edits
         )
     elif args.editable:
         train = utils.retrieveEditDataloader(
@@ -759,11 +756,12 @@ if __name__ == "__main__":
             tokenizer,
             loc=loc,
             bs=args.bs,
-            pct=30,
+            pct=40,
             shuffle=True,
             max_val_len=config.max_val_len,
             mode='editable',
-            inner_loop=config.inner_loop
+            inner_loop=config.inner_loop,
+            n_edits=args.n_edits
         )
         train = dataloader.train
         validation = dataloader.validation
