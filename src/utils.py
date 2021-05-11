@@ -265,17 +265,17 @@ def sailPreprocess(debug=False):
         machine_name = platform.node().split(".")[0]
         scr = max(os.listdir(f"/{machine_name}"))
         save_loc = f"/{machine_name}/{scr}"
-        local_dir = f"{save_loc}/{user}"
+        local_dir = '/juice/scr/spencerb/results'
 
         if os.path.exists(local_dir) | debug:
             return local_dir
 
-        os.mkdir(f"{save_loc}/{user}")
-        os.mkdir(f"{save_loc}/{user}/models")
-        os.mkdir(f"{save_loc}/{user}/models/finetune")
-        os.mkdir(f"{save_loc}/{user}/errors")
-        os.mkdir(f"{save_loc}/{user}/eval")
-        os.mkdir(f"{save_loc}/{user}/hf")
+        os.mkdir(f"{local_dir}")
+        os.mkdir(f"{local_dir}/models")
+        os.mkdir(f"{local_dir}/models/finetune")
+        os.mkdir(f"{local_dir}/errors")
+        os.mkdir(f"{local_dir}/eval")
+        os.mkdir(f"{local_dir}/hf")
         copyfile(
             "/juice/scr/spencerb/editable_nlp/self_sample.zip", 
             f"{local_dir}/self_sample.zip"

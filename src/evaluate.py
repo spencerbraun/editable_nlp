@@ -366,7 +366,7 @@ def evalSelfSample(
             print(f"Edit number {edit_number}")
             print(f"Model number {model_number}")
             edit_package, edit_locs, gold_tokens = processBatch(batch, lama=lama)
-            if edit_package[0].shape[-1] > 500:
+            if (edit_package[0].shape[-1] > 500) and lama:
                 print(f"Sequence {train_step} too long: Skipping...")
                 continue
             model_edited, logit_hist, ll_change, loss = performOneEdit(

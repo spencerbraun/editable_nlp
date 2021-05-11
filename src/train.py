@@ -147,8 +147,7 @@ class EditTrainer(BaseTrainer):
         self.val_iter = 0
 
         self.model = utils.loadTrainedModel(
-            "/juice/scr/spencerb/editable_nlp/models/finetune/T5_finetune_epoch0_ts20000.20210505.09.05.1620232583",
-            #f"{self.config.write_loc}/models/finetune/{self.config.ft_model_name}", 
+            f"{self.config.write_loc}/models/finetune/{self.config.ft_model_name}", 
             name=self.model_name,
             cache_dir=self.config.write_loc,
             tokenizer=False
