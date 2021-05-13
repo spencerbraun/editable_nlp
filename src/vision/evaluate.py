@@ -13,11 +13,14 @@ import hydra
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, RandomSampler, random_split
+import torchvision
 from torchvision.models import resnet18, densenet169
 import higher
 
 from vision.data_process import loadCIFAR, loadImageNet
 import vision.utils as utils
+from alg.senn_conditional import ConditionalLinearWrapper
+
 
 eps = np.finfo(np.float32).eps.item()
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -79,8 +82,15 @@ def repeater(dataloader):
 def editGenerator(dataset, batch_size=1):
     num_classes = len(dataset.dataset.classes) if type(dataset) == torch.utils.data.Subset else dataset.classes
     sampler = RandomSampler(dataset)
+    dataloader = DataLoader(
+        dataset,
+        sampler=sampler,
+        batch_size=batch_size,
+        # num_workers=2,
+        pin_memory=True
+    )
     while True:
-        for inputs, labels in repeater(DataLoader(dataset, sampler=sampler, batch_size=batch_size, num_workers=2)):
+        for inputs, labels in repeater(dataloader):
             edit_labels = torch.randint_like(labels, num_classes)
             yield inputs, edit_labels
 
@@ -200,7 +210,7 @@ def evalEditable(
     except:
         print(f"Not enough validation data to perform {n_edit_examples} edits")
 
-    edit_generator = editGenerator(edit_dataset, config.n_edits)
+    edit_generator = editGenerator(edit_dataset, config.edit_bs)
     val_loader = DataLoader(val_dataset, batch_size=200, shuffle=True, num_workers=2)
 
     with torch.no_grad(), open(saveloc, "w") as f:
@@ -232,7 +242,7 @@ def evalEditable(
                 lrs=lrs,
                 default_lr=1e-3,
                 mode="val",
-                split_params=self.config.split_params
+                split_params=config.split_params
             )
 
             model_edited.eval()
@@ -292,15 +302,23 @@ def main(config: DictConfig):
     model_path = os.path.join(loc, f"models/{config.model}_pretrained")
     load_model = densenet169 if config.model == 'densenet169' else resnet18
     model = utils.loadOTSModel(load_model, num_classes, config.pretrained)
-    if not config.pretrained and not OmegaConf.is_missing(config, 'model_path'):
-        model_path = os.path.join(loc, config.model_path)
-        model.load_state_dict(torch.load(model_path))
-        print(f"Loaded model weights from {model_path}")
 
     if config.model == 'resnet18':
         utils.prep_resnet_for_maml(model)
     elif config.model == 'densenet169':
         utils.prep_densenet_for_maml(model)
+
+    # TODO make compatible with DenseNet
+    if config.split_params:
+        basic_block_predicate = lambda m: isinstance(m, torchvision.models.resnet.BasicBlock)
+        n_hidden = lambda m: m.conv2.weight.shape[0]
+        ConditionalLinearWrapper.wrap_model(model, n_hidden, -3, basic_block_predicate)
+
+    if not config.pretrained and not OmegaConf.is_missing(config, 'model_path'):
+        model_path = os.path.join(loc, config.model_path)
+        model.load_state_dict(torch.load(model_path))
+        print(f"Loaded model weights from {model_path}")
+
 
     evalEditable(
         model,

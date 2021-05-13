@@ -34,6 +34,7 @@ def loadCIFAR(root='../..', split='train'):
         raise RuntimeError(msg)
 
     dataset = datasets.CIFAR10(data_path, train=train, transform=transform, download=True)
+    print(f"Loaded CIFAR-10 {split} set from {data_path}")
     return dataset
 
 
@@ -67,6 +68,7 @@ def loadImageNet(root='../..', split='train'):
 
     data_path = os.path.join(data_path, split)
     dataset = datasets.ImageFolder(data_path, transform=transform)
+    print(f"Loaded ImageNet {split} set from {data_path}")
     return dataset
 
 

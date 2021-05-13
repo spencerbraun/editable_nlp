@@ -8,13 +8,13 @@ num_classes: 1000
 bs: 128
 
 epochs: 1
-loss: kl
-outer_lr: 1.0e-5
-inner_lr: 5.0e-6
-n_edit_steps: 1
+loss: cross_entropy
+outer_lr: 1.0e-7
+inner_lr: 1.0e-5
+n_edit_steps: 5
 edit_bs: 16
-cedit: 0.1
-cloc: 0.1
+cedit: 0.5
+cloc: 10
 learnable_lr: True
 lr_lr: 1.0e-07
 split_params: False

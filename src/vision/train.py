@@ -70,7 +70,6 @@ class BaseTrainer:
                 name=f"{self.config.dataset}/{self.config.model}/{self.config.task}_{self.timestamp}",
                 dir=self.config.write_loc,
             )
-            wandb.watch(self.model)
 
     def saveState(self, state_obj, train_step, name="finetune", final=False):
         if not self.config.debug:
@@ -92,6 +91,10 @@ class BaseTrainer:
                 f"Epoch: {self.epoch}; TrainStep {train_step}; ",
                 f"; ".join([f"{key} {val}" for key,val in kwargs.items()])
             ))
+    
+    def verbose_echo(self, message):
+        if not self.config.silent and self.config.verbose:
+            print(message)
 
     def configure_data(self, train_set, val_set):
         self.train_set = train_set
@@ -152,7 +155,8 @@ class BaseTrainer:
             val_subset,
             batch_size=100,
             shuffle=True,
-            num_workers=2
+            # num_workers=2,
+            pin_memory=True
         )
 
         with torch.no_grad():
@@ -185,9 +189,15 @@ class BaseTrainer:
         self.model.train()
         self.model.to(self.device)
         self.global_iter = 0
-        train_loader = DataLoader(self.train_set, batch_size=self.config.bs, shuffle=True, num_workers=2)
+        train_loader = DataLoader(
+            self.train_set,
+            batch_size=self.config.bs,
+            shuffle=True,
+            # num_workers=2,
+            pin_memory=True
+        )
 
-        print("Starting training")
+        print("Starting finetune training")
 
         for epoch in range(self.config.epochs):
             self.epoch = epoch
@@ -195,7 +205,8 @@ class BaseTrainer:
             top1 = utils.AverageMeter('Acc@1', ':6.2f')
             top5 = utils.AverageMeter('Acc@5', ':6.2f')
 
-            for train_step, (inputs, labels) in enumerate(train_loader):
+            for inputs, labels in train_loader:
+                self.verbose_echo("Loaded training batch")
 
                 loss, acc1, acc5 = self.train_step(inputs, labels)
 
@@ -235,6 +246,7 @@ class EditTrainer(BaseTrainer):
         elif self.config.model == 'densenet169':
             utils.prep_densenet_for_maml(self.model)
 
+        # TODO make compatible with DenseNet
         if config.split_params:
             basic_block_predicate = lambda m: isinstance(m, torchvision.models.resnet.BasicBlock)
             n_hidden = lambda m: m.conv2.weight.shape[0]
@@ -252,6 +264,8 @@ class EditTrainer(BaseTrainer):
 
 
     def train_step(self, inputs, labels):
+        self.verbose_echo("Train step")
+
         base_inputs, loc_inputs = torch.split(inputs, [(inputs.shape[0] + 1) // 2, inputs.shape[0] // 2])
         base_labels, loc_labels = torch.split(labels, [(labels.shape[0] + 1) // 2, labels.shape[0] // 2])
 
@@ -287,6 +301,7 @@ class EditTrainer(BaseTrainer):
                 split_params=self.config.split_params
             )
             sum_l_edit += l_edit.item() / self.config.n_edits
+            self.verbose_echo(f"Computed edit loss: {l_edit}")
 
             with torch.no_grad():
                 loc_logits = self.model(loc_inputs)
@@ -299,6 +314,7 @@ class EditTrainer(BaseTrainer):
                 )
             ).sum(-1).mean()
             sum_l_loc += l_loc.item() / self.config.n_edits
+            self.verbose_echo(f"Computed locality loss: {l_loc}")
 
             total_edit_loss = (
                 self.config.cloc * l_loc  + 
@@ -329,54 +345,76 @@ class EditTrainer(BaseTrainer):
 
         # Compute base loss
         l_base, base_logits = self.compute_base_loss(self.model, base_inputs, base_labels)
-        acc1_pre, acc5_pre = accuracy(base_logits, base_labels, topk=(1,5))
         l_base.backward()
+        self.verbose_echo(f"Computed base loss: {l_base}")
+
+        acc1_pre, acc5_pre = accuracy(base_logits, base_labels, topk=(1,5))
+        self.verbose_echo(f"Computed pre-edit accuracies: {acc1_pre}")
 
         edited_base_logits = model_edited(base_inputs)
         acc1_post, acc5_post = accuracy(edited_base_logits, base_labels, topk=(1,5))
-
-        nn.utils.clip_grad_value_(self.model.parameters(), 10)
-        self.opt.step()
-        if self.config.learnable_lr:
-            self.lr_opt.step()
+        self.verbose_echo(f"Computed post-edit accuracies: {acc1_post}")
 
         total_loss = (l_base + self.config.cloc * sum_l_loc + self.config.cedit * sum_l_edit).item()
+
+        info_dict = {
+            'step': self.global_iter,
+            'loss/base': l_base.item(),
+            'loss/edit': sum_l_edit,
+            'loss/loc': sum_l_loc,
+            'loss/train': total_loss,
+            'edit_success_train': edit_success,
+            'acc/top1_pre_train': acc1_pre,
+            'acc/top5_pre_train': acc5_pre,
+            'acc/top1_post_train': acc1_post,
+            'acc/top5_post_train': acc5_post,
+            **{f'lr/lr{i}': lr.data.item() for i, lr in enumerate(self.lrs)}
+        }
+
+        if self.config.split_params:
+            info_dict['grad/phi'] = nn.utils.clip_grad_norm_(self.model.phi(), 50).item()
+            info_dict['grad/theta'] = nn.utils.clip_grad_norm_(self.model.theta(), 50).item()
+        else:
+            info_dict['grad/all'] = nn.utils.clip_grad_norm_(self.model.parameters(), 50).item()
+
         print('Train step {}\tLoss: {:.2f}\tEdit success: {:.2f}\tPre-edit top-1 acc: {:.2f}\tPost-edit top-1 acc: {:.2f}\t' \
                 'Pre-edit top-5 acc: {:.2f}\tPost-edit top-5 acc: {:.2f}'.format(
                 self.global_iter, total_loss, edit_success, acc1_pre, acc1_post, acc5_pre, acc5_post))
 
         if not self.config.debug:
-            wandb.log({
-                'step': self.global_iter,
-                'loss/base': l_base,
-                'loss/edit': sum_l_edit,
-                'loss/loc': sum_l_loc,
-                'loss/train': total_loss,
-                'edit_success_train': edit_success,
-                'acc/top1_pre_train': acc1_pre,
-                'acc/top5_pre_train': acc5_pre,
-                'acc/top1_post_train': acc1_post,
-                'acc/top5_post_train': acc5_post,
-                **{f'lr/lr{i}': lr.data.item() for i, lr in enumerate(self.lrs)},
-            })
+            wandb.log(info_dict)
+
+        self.opt.step()
+        if self.config.learnable_lr:
+            self.lr_opt.step()
 
         return total_loss, acc1_post, acc5_post
 
     def val_step(self):
+        self.verbose_echo("Validation step")
+
         top1_pre, top5_pre = [], []
         top1_post, top5_post = [], []
         losses, ll_changes, edit_successes = [], [], []
 
-        val_loader = DataLoader(self.val_set, batch_size=2*self.config.bs, shuffle=True, num_workers=2)
+        val_loader = DataLoader(
+            self.val_set,
+            batch_size=2*self.config.bs,
+            shuffle=True,
+            # num_workers=2,
+            pin_memory=True
+        )
+        self.verbose_echo("Retrieved validation dataloader")
 
         with torch.no_grad():
-            for edit_num, (inputs, labels) in enumerate(val_loader):
-                if edit_num >= 10:  # validate on 10 edits
-                    break
+            edit_num = 0
+            for inputs, labels in val_loader:
+                self.verbose_echo(f"Validation\tEdit number {edit_num}")
 
                 base_inputs, loc_inputs = torch.split(inputs, [(inputs.shape[0] + 1) // 2, inputs.shape[0] // 2])
                 base_labels, loc_labels = torch.split(labels, [(labels.shape[0] + 1) // 2, labels.shape[0] // 2])
                 edit_inputs, edit_labels = next(self.val_edit_gen)
+                self.verbose_echo(f"Generated edit example")
 
                 base_inputs, base_labels = base_inputs.to(self.device), base_labels.to(self.device)
                 loc_inputs, loc_labels = loc_inputs.to(self.device), loc_labels.to(self.device)
@@ -384,7 +422,10 @@ class EditTrainer(BaseTrainer):
 
                 self.model.eval()
                 l_base, base_logits = self.compute_base_loss(self.model, base_inputs, base_labels)
+                self.verbose_echo(f"Computed base loss: {l_base}")
+
                 acc1_pre, acc5_pre = accuracy(base_logits, base_labels, topk=(1, 5))
+                self.verbose_echo(f"Computed pre-edit accuracies: {acc1_pre}")
 
                 top1_pre.append(acc1_pre)
                 top5_pre.append(acc5_pre)
@@ -402,6 +443,8 @@ class EditTrainer(BaseTrainer):
                 ll_changes.append(ll_change)
                 edit_successes.append(edit_success)
 
+                self.verbose_echo(f"Computed edit loss: {l_edit}")
+
                 model_edited.eval()
                 loc_logits = self.model(loc_inputs)
                 edited_loc_logits = model_edited(loc_inputs)
@@ -413,6 +456,8 @@ class EditTrainer(BaseTrainer):
                     )
                 ).sum(-1).mean()
 
+                self.verbose_echo(f"Computed locality loss: {l_loc}")
+
                 total_edit_loss = (
                     self.config.cloc * l_loc  + 
                     self.config.cedit * l_edit
@@ -423,8 +468,14 @@ class EditTrainer(BaseTrainer):
                 edited_base_logits = model_edited(base_inputs)
                 acc1_post, acc5_post = accuracy(edited_base_logits, base_labels, topk=(1, 5))
 
+                self.verbose_echo(f"Computed post-edit accuracies: {acc1_post}")
+
                 top1_post.append(acc1_post)
                 top5_post.append(acc5_post)
+
+                edit_num += 1
+                if edit_num >= 10:  # validate on 10 edits
+                    break
 
         print('Epoch {} Validation\tLoss: {:.2f}\tEdit success: {:.2f}\tPre-edit top-1 acc: {:.2f}\tPost-edit top-1 acc: {:.2f}\t' \
                 'Pre-edit top-5 acc: {:.2f}\tPost-edit top-5 acc: {:.2f}'.format(
@@ -456,9 +507,15 @@ class EditTrainer(BaseTrainer):
         self.model.train()
         self.model.to(self.device)
         self.global_iter = 0
-        train_loader = DataLoader(self.train_set, batch_size=2*self.config.bs, shuffle=True, num_workers=2)
+        train_loader = DataLoader(
+            self.train_set,
+            batch_size=2*self.config.bs,
+            shuffle=True,
+            # num_workers=2,
+            pin_memory=True
+        )
 
-        print("Starting training")
+        self.verbose_echo("Starting editable training")
 
         for epoch in range(self.config.epochs):
             self.epoch = epoch
@@ -466,7 +523,10 @@ class EditTrainer(BaseTrainer):
             top1 = utils.AverageMeter('Acc@1', ':6.2f')
             top5 = utils.AverageMeter('Acc@5', ':6.2f')
 
-            for train_step, (inputs, labels) in enumerate(train_loader):
+            self.verbose_echo(f"Epoch {epoch}")
+
+            for inputs, labels in train_loader:
+                self.verbose_echo("Loaded training batch")
 
                 loss, acc1, acc5 = self.train_step(inputs, labels)
 

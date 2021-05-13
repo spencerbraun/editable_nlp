@@ -8,7 +8,6 @@
 
 script=$1
 
-source env/bin/activate
-echo "python3 src/vision/${script}.py experiment=editable_cifar_resnet"
-python3 src/vision/${script}.py experiment=editable_cifar_resnet
-
+source ../env/bin/activate
+echo "python3 -m vision.${script} experiment=editable_cifar_resnet"
+python3 -m vision.${script} experiment=editable_cifar_resnet

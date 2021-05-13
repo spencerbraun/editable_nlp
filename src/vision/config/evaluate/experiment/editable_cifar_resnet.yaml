@@ -3,10 +3,12 @@
 dataset: cifar10
 model: resnet18
 pretrained: False
-model_path: models/finetune_epoch24_ts9999.20210509.23.05.1620626982
+model_path: models/finetune_epoch49_ts9999.20210510.18.05.1620698213  # ENN: models/finetune_epoch24_ts9999.20210509.23.05.1620626982
 n_edit_steps: 5
 edit_bs: 16
 seq_edits: 200
 
-cedit: 0.1
+cedit: 0.01
 cloc: 1
+
+split_params: False

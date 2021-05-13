@@ -39,7 +39,7 @@ def prep_resnet_for_maml(model, adapt_all: bool = False):
         if adapt_all:
             return list(self.parameters())
         else:
-            return list(self.layer3.parameters())
+            return list(self.layer4.parameters())
 
     type(model).inner_params = _inner_params
 
