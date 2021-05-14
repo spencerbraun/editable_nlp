@@ -109,7 +109,7 @@ def performEdits(
     l_edit, ll_change, edit_success = 0.0, 0.0, 0.0
 
     model.eval()
-    lp_hist.append(get_logprobs(model, edit_inputs, edit_labels))
+    lp_hist.append(get_logprobs(model, edit_inputs, edit_labels).exp())
 
     param_groups = [
         {'params': p, 'lr': None} 
@@ -139,19 +139,18 @@ def performEdits(
                 loss = F.cross_entropy(edit_logits, edit_labels)
                 if split_params:
                     fmodel.set_editing(False)
-                diffopt.step(loss)
 
+                diffopt.step(loss)
                 lp = get_logprobs(fmodel, edit_inputs, edit_labels)
-                lp_hist.append(lp)
+                lp_hist.append(lp.exp())
 
     edit_logits = fmodel(edit_inputs)
     l_edit = F.cross_entropy(edit_logits, edit_labels)
     edit_success = (torch.argmax(edit_logits, -1) == edit_labels).float().mean().item() * 100.0
-    ll_change = ((abs(lp_hist[0]) - abs(lp_hist[-1])) / (abs(lp_hist[0]) + eps))
-    
-    print("Mean log prob history:", ["{:.2f}".format(i.mean().item()) for i in lp_hist])
-    print("Edit step {}\tMean ll change {:.2f}\tMean log prob {:.2f}\tLoss {:.2f}".format(
-            edit_step, ll_change.mean().item(), lp_hist[-1].mean().item(), l_edit))
+    prob_change = (abs(lp_hist[-1]) - abs(lp_hist[0]))#  / (abs(lp_hist[0]) + eps))
+    print("Mean prob history:", ["{:.2f}".format(i.mean().item()) for i in lp_hist])
+    print("Edit step {}\tMean prob change {:.2f}\tMean prob {:.2f}\tLoss {:.2f}".format(
+            edit_step, prob_change.mean().item(), lp_hist[-1].mean().item(), l_edit))
 
     if mode == 'train':
         model_edited = fmodel
@@ -159,7 +158,7 @@ def performEdits(
         model_edited = copy.deepcopy(model)
         model_edited.load_state_dict(fmodel.state_dict())
 
-    return model_edited, l_edit, lp_hist, ll_change, edit_success
+    return model_edited, l_edit, lp_hist, prob_change, edit_success
 
 def evaluateOnDataset(model, dataset):
     dataloader = DataLoader(dataset, batch_size=100, shuffle=True, num_workers=2)

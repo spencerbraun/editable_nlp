@@ -376,6 +376,7 @@ class EditTrainer(BaseTrainer):
             info_dict['grad/theta'] = nn.utils.clip_grad_norm_(self.model.theta(), 50).item()
         else:
             info_dict['grad/all'] = nn.utils.clip_grad_norm_(self.model.parameters(), 50).item()
+        info_dict['grad/lrs'] = nn.utils.clip_grad_norm_(self.lrs, 50).item()
 
         print('Train step {}\tLoss: {:.2f}\tEdit success: {:.2f}\tPre-edit top-1 acc: {:.2f}\tPost-edit top-1 acc: {:.2f}\t' \
                 'Pre-edit top-5 acc: {:.2f}\tPost-edit top-5 acc: {:.2f}'.format(
@@ -588,5 +589,7 @@ if __name__ == '__main__':
     random.seed(123)
     np.random.seed(123)
     torch.manual_seed(123)
-
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True)
+    
     main()
