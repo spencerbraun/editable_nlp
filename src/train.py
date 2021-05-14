@@ -55,7 +55,7 @@ class BaseTrainer:
                 project='patchable' if self.model_name == 'gpt2' else 'patchable_masked',
                 entity='patchable-lm',
                 config=self.config,
-                name=f"{self.config.task}_{self.timestamp}",
+                name=f"{self.config.task}{split}_{self.timestamp}",
                 dir=self.config.write_loc,
             )
             wandb.watch(self.model)
@@ -560,8 +560,8 @@ class SelfSampleTrainer(EditTrainer):
                             track_higher_grads=True
                     ) as (fmodel, diffopt):
                         edit_tokens_, edit_mask_, edit_labels_ = (
-                            self.strip_padding(edit_tokens[edit_example_idx],
-                                               edit_mask[edit_example_idx],
+                            self.strip_padding(edit_template[edit_example_idx],
+                                               edit_temp_mask[edit_example_idx],
                                                edit_labels[edit_example_idx])
                         )
                         for edit_step in range(self.config.n_edit_steps):
@@ -579,8 +579,8 @@ class SelfSampleTrainer(EditTrainer):
                         
                         if self.model_name == 't5-small':
                             edit_tokens_, edit_mask_, edit_labels_ = (
-                            self.strip_padding(edit_template[edit_example_idx],
-                                               edit_temp_mask[edit_example_idx],
+                            self.strip_padding(edit_tokens[edit_example_idx],
+                                               edit_mask[edit_example_idx],
                                                edit_labels[edit_example_idx])
                             )
                         edit_out = fmodel(

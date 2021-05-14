@@ -149,8 +149,7 @@ def performOneEdit(
     
     logit_hist = []
     logit_hist.append(
-        idxProbs(model, edit_locs, gold_tokens, 
-        edit_tokens if model_name == 'gpt2' else edit_template,
+        idxProbs(model, edit_locs, gold_tokens, edit_tokens,
         None if model_name == 'gpt2' else edit_labels),
     )
     with higher.innerloop_ctx(
@@ -166,8 +165,8 @@ def performOneEdit(
             if hasattr(fmodel, "set_editing"):
                 fmodel.set_editing(True)
             output = fmodel(
-                edit_tokens, 
-                attention_mask=edit_mask,
+                edit_template, 
+                attention_mask=edit_temp_mask,
                 labels=edit_labels
             )
             if hasattr(fmodel, "set_editing"):
@@ -175,8 +174,7 @@ def performOneEdit(
             diffopt.step(output.loss)
 
             logit_hist.append(
-                idxProbs(fmodel, edit_locs, gold_tokens, 
-                edit_tokens if model_name == 'gpt2' else edit_template,
+                idxProbs(fmodel, edit_locs, gold_tokens, edit_tokens,
                 None if model_name == 'gpt2' else edit_labels),
             )
 
@@ -384,7 +382,6 @@ def evalSelfSample(
             print(f"Edit number {edit_number}")
             print(f"Model number {model_number}")
             edit_package, edit_locs, gold_tokens = processBatch(batch, lama=lama)
-
             model_edited, logit_hist, ll_change, loss = performOneEdit(
                 model_edited,
                 't5-small' if lama else 'gpt2',

@@ -73,7 +73,7 @@ class LAMADataset(torch.utils.data.IterableDataset):
                 split=datasets.ReadInstruction('train', to=self.pct, unit='%')
             )
 
-        dataset = dataset.shuffle(123)
+        
         templates = list(set(dataset['template']))
         edit_dict = {k: [] for k in templates}
         for temp, obj in zip(dataset['template'], dataset['obj_surface']):
@@ -89,6 +89,7 @@ class LAMADataset(torch.utils.data.IterableDataset):
         for idx in tqdm(range(len(dataset))):
             temp = data_out['template'][idx]
             obj = data_out['obj_surface'][idx]
+            import ipdb; ipdb.set_trace()
             while True:
                 edit = random.choice(edit_dict[temp])
                 if edit != obj:
@@ -135,7 +136,7 @@ class LAMADataset(torch.utils.data.IterableDataset):
                 orig_label = self.processMasks(idx, 'label')
 
                 sub_surface = self.dataset['sub_surface'][idx]
-                template = self.dataset['template'][index]
+                template = self.dataset['template'][idx]
                 template = template.replace("[X]", sub_surface)
                 masked_template = template.replace("[Y]", "<extra_id_0>")
 
