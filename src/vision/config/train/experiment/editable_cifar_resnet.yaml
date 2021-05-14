@@ -14,7 +14,6 @@ outer_lr: 1.0e-4 # 5.0e-5
 inner_lr: 1.0e-3 # 1.0e-5
 n_edit_steps: 5
 edit_bs: 16
-n_edits: 10
 cedit: 0.01
 cloc: 1
 learnable_lr: True

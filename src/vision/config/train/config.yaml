@@ -4,5 +4,7 @@ model_save_pt: 1000
 silent: False
 model_path: null
 n_edits: 1
+cbase: 1
+weight_decay: false
 defaults:
   - experiment: base_cifar_resnet

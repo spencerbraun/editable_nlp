@@ -229,7 +229,6 @@ class BaseTrainer:
                     'loss/train_avg': losses.avg,
                     'acc/top1_train_avg': top1.avg,
                     'acc/top5_train_avg': top5.avg,
-                    'lr': self.opt.param_groups[0]['lr'],
                 })
 
             if self.scheduler:
@@ -250,7 +249,12 @@ class EditTrainer(BaseTrainer):
         if config.split_params:
             basic_block_predicate = lambda m: isinstance(m, torchvision.models.resnet.BasicBlock)
             n_hidden = lambda m: m.conv2.weight.shape[0]
-            ConditionalLinearWrapper.wrap_model(self.model, n_hidden, -3, basic_block_predicate)
+            ConditionalLinearWrapper.wrap_model(
+                self.model,
+                n_hidden,
+                dim=-3,  # (in_channels, out_channels, H, W)
+                predicate=basic_block_predicate
+            )
 
 
     def configure_data(self, train_set, val_set):
@@ -290,7 +294,7 @@ class EditTrainer(BaseTrainer):
             edit_inputs, edit_labels = next(self.train_edit_gen)
             edit_inputs, edit_labels = edit_inputs.to(self.device), edit_labels.to(self.device)
 
-            model_edited, l_edit, lp_hist, ll_change, edit_success = performEdits(
+            model_edited, l_edit, lp_hist, prob_change, edit_success, inner_grad_norms = performEdits(
                 self.model,
                 edit_inputs,
                 edit_labels,
@@ -303,6 +307,7 @@ class EditTrainer(BaseTrainer):
             sum_l_edit += l_edit.item() / self.config.n_edits
             self.verbose_echo(f"Computed edit loss: {l_edit}")
 
+            model_edited.train()  # Use batch statistics for locality loss
             with torch.no_grad():
                 loc_logits = self.model(loc_inputs)
             edited_loc_logits = model_edited(loc_inputs)
@@ -345,6 +350,7 @@ class EditTrainer(BaseTrainer):
 
         # Compute base loss
         l_base, base_logits = self.compute_base_loss(self.model, base_inputs, base_labels)
+        l_base *= self.config.cbase
         l_base.backward()
         self.verbose_echo(f"Computed base loss: {l_base}")
 
@@ -368,6 +374,7 @@ class EditTrainer(BaseTrainer):
             'acc/top5_pre_train': acc5_pre,
             'acc/top1_post_train': acc1_post,
             'acc/top5_post_train': acc5_post,
+            'grad/inner': np.sum(inner_grad_norms),
             **{f'lr/lr{i}': lr.data.item() for i, lr in enumerate(self.lrs)}
         }
 
@@ -396,7 +403,7 @@ class EditTrainer(BaseTrainer):
 
         top1_pre, top5_pre = [], []
         top1_post, top5_post = [], []
-        losses, ll_changes, edit_successes = [], [], []
+        losses, prob_changes, edit_successes = [], [], []
 
         val_loader = DataLoader(
             self.val_set,
@@ -431,7 +438,7 @@ class EditTrainer(BaseTrainer):
                 top1_pre.append(acc1_pre)
                 top5_pre.append(acc5_pre)
 
-                model_edited, l_edit, lp_hist, ll_change, edit_success = performEdits(
+                model_edited, l_edit, lp_hist, prob_change, edit_success, _ = performEdits(
                     self.model,
                     edit_inputs,
                     edit_labels,
@@ -441,7 +448,7 @@ class EditTrainer(BaseTrainer):
                     mode="val",
                     split_params=self.config.split_params
                 )
-                ll_changes.append(ll_change)
+                prob_changes.append(prob_change)
                 edit_successes.append(edit_success)
 
                 self.verbose_echo(f"Computed edit loss: {l_edit}")
@@ -497,7 +504,13 @@ class EditTrainer(BaseTrainer):
         if not self.config.debug:
             torch.save(self.config, self.hyperspath)
 
-        self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config.outer_lr)
+        if self.config.weight_decay:
+            self.opt = torch.optim.Adam([
+                {'params': self.model.theta()},
+                {'params': self.model.phi(), 'weight_decay': 0.1}
+            ], lr=self.config.outer_lr)
+        else:
+            self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config.outer_lr)
         self.scheduler = None
         self.lrs = [
             torch.nn.Parameter(torch.tensor(self.config.inner_lr)) 

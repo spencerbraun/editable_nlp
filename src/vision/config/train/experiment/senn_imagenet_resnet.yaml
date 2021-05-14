@@ -1,0 +1,21 @@
+# @package _global_
+
+task: editable
+model: resnet18
+pretrained: True
+dataset: imagenet
+num_classes: 1000
+bs: 128
+
+epochs: 100
+loss: cross_entropy
+outer_lr: 1.0e-7
+inner_lr: 1.0e-5
+n_edit_steps: 5
+edit_bs: 16
+n_edits: 1
+cedit: 0.5
+cloc: 10
+learnable_lr: True
+lr_lr: 1.0e-7
+split_params: True

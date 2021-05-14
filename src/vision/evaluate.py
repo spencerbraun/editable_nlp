@@ -105,12 +105,23 @@ def performEdits(
     mode="train",
     split_params=False
 ):
+    INNER_GRAD_NORMS = []
+    MAX_NORM = 10000
+
+    def clip_callback(all_grads):
+        nonlocal INNER_GRAD_NORMS
+        norm = torch.cat([g.flatten() for g in all_grads]).norm().detach()
+        ratio = MAX_NORM / (norm + 1e-6)
+        INNER_GRAD_NORMS.append(norm.item())
+        return [g * min(1, ratio) for g in all_grads]
+
+    def callback(all_grads):
+        nonlocal INNER_GRAD_NORMS
+        norm = torch.cat([g.flatten() for g in all_grads]).norm().detach()
+        INNER_GRAD_NORMS.append(norm.item())
+        return all_grads
+
     lp_hist = []
-    l_edit, ll_change, edit_success = 0.0, 0.0, 0.0
-
-    model.eval()
-    lp_hist.append(get_logprobs(model, edit_inputs, edit_labels).exp())
-
     param_groups = [
         {'params': p, 'lr': None} 
         for p in model.inner_params()
@@ -123,26 +134,27 @@ def performEdits(
         )
     )
 
-    with torch.enable_grad():
-        with higher.innerloop_ctx(
-            model,
-            inner_opt,
-            override={'lr': lrs} if lrs else None,
-            copy_initial_weights=False,
-            track_higher_grads=(mode == "train")
-        ) as (fmodel, diffopt):
-            for edit_step in range(n_edit_steps):
-                fmodel.eval()  # needed for batchnorm to work properly on batch size of 1
-                if split_params:
-                    fmodel.set_editing(True)
-                edit_logits = fmodel(edit_inputs)
-                loss = F.cross_entropy(edit_logits, edit_labels)
-                if split_params:
-                    fmodel.set_editing(False)
+    with torch.enable_grad(), higher.innerloop_ctx(
+        model,
+        inner_opt,
+        override={'lr': lrs} if lrs else None,
+        copy_initial_weights=False,
+        track_higher_grads=(mode == "train")
+    ) as (fmodel, diffopt):
+        fmodel.eval()
+        lp_hist.append(get_logprobs(fmodel, edit_inputs, edit_labels).exp())
 
-                diffopt.step(loss)
-                lp = get_logprobs(fmodel, edit_inputs, edit_labels)
-                lp_hist.append(lp.exp())
+        for edit_step in range(n_edit_steps):
+            if split_params:
+                fmodel.set_editing(True)
+            edit_logits = fmodel(edit_inputs)
+            loss = F.cross_entropy(edit_logits, edit_labels)
+            if split_params:
+                fmodel.set_editing(False)
+
+            diffopt.step(loss, grad_callback=callback)
+            lp = get_logprobs(fmodel, edit_inputs, edit_labels)
+            lp_hist.append(lp.exp())
 
     edit_logits = fmodel(edit_inputs)
     l_edit = F.cross_entropy(edit_logits, edit_labels)
@@ -158,7 +170,8 @@ def performEdits(
         model_edited = copy.deepcopy(model)
         model_edited.load_state_dict(fmodel.state_dict())
 
-    return model_edited, l_edit, lp_hist, prob_change, edit_success
+    return model_edited, l_edit, lp_hist, prob_change, edit_success, INNER_GRAD_NORMS
+
 
 def evaluateOnDataset(model, dataset):
     dataloader = DataLoader(dataset, batch_size=100, shuffle=True, num_workers=2)
@@ -173,7 +186,7 @@ def evaluateOnDataset(model, dataset):
         acc1, acc5 = accuracy(logits, labels, topk=(1,5))
         top1.update(acc1, inputs.shape[0])
         top5.update(acc5, inputs.shape[0])
-    
+
     return top1.avg, top5.avg
 
 
@@ -193,7 +206,7 @@ def evalEditable(
     edit_number = 0
     model_number = 0
     sequential = config.seq_edits > 1
-    
+
     model.to(DEVICE)
     original_model = copy.deepcopy(model)
     orig_params = get_params(original_model)
@@ -233,7 +246,7 @@ def evalEditable(
             base_logits = model(base_inputs)
             l_base = F.cross_entropy(base_logits, base_labels)
 
-            model_edited, l_edit, lp_hist, ll_change, edit_success = performEdits(
+            model_edited, l_edit, lp_hist, prob_change, edit_success, inner_grad_norms = performEdits(
                 model,
                 edit_inputs,
                 edit_labels,
