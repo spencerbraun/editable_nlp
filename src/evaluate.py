@@ -81,8 +81,9 @@ def getIndexedProbs(model, index, gold_tokens, sent_tokens, labels):
         
         gold_tokens = gold_tokens.flatten().unsqueeze_(1)
         logit_sum = torch.sum(logits.gather(1, gold_tokens))
+        accuracy = (logits.argmax(-1) == gold_tokens.squeeze()).all(-1).float().mean()
 
-    return logit_sum
+    return (logit_sum, accuracy)
 
 def getT5IndexedProbs(model, index, gold_tokens, sent_tokens, labels):
 
@@ -95,7 +96,10 @@ def getT5IndexedProbs(model, index, gold_tokens, sent_tokens, labels):
         gold_tokens = gold_tokens.flatten().unsqueeze_(1).cpu()
         logit_sum = torch.sum(logits.gather(1, gold_tokens))
 
-    return logit_sum
+        accuracy = (output_lps.argmax(-1) == labels).all(-1).float().mean().cpu()
+        
+    model.train()
+    return (logit_sum, accuracy)
 
 def loadLr(model_path):
     model_name = os.path.basename(model_path)
@@ -152,6 +156,7 @@ def performOneEdit(
         idxProbs(model, edit_locs, gold_tokens, edit_tokens,
         None if model_name == 'gpt2' else edit_labels),
     )
+    
     with higher.innerloop_ctx(
         model, 
         inner_opt, 
@@ -178,9 +183,9 @@ def performOneEdit(
                 None if model_name == 'gpt2' else edit_labels),
             )
 
-            ll_change = (abs(logit_hist[0]) - abs(logit_hist[-1]))/abs(logit_hist[0])
+            ll_change = (abs(logit_hist[0][0]) - abs(logit_hist[-1][0]))/abs(logit_hist[0][0])
             print(f"logit history: {logit_hist}")
-            print(f"Edit step {edit_step}; ll change {ll_change} , logit {logit_hist[-1]}, loss {output.loss}")
+            print(f"Edit step {edit_step}; ll change {ll_change} , logit {logit_hist[-1][0]}, loss {output.loss}")
 
     edited_model = copy.deepcopy(model)
     edited_model.load_state_dict(fmodel.state_dict())
@@ -280,7 +285,7 @@ def evalEditable(
                     
             new_ppl = perplexity(model_out, dataloader)
 
-            for val in logit_hist:
+            for (val, acc) in logit_hist:
                 run = (train_step, n_edit_steps, val, orig_ppl, new_ppl)
                 form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
                 writeStr = ",".join([form(x) for x in run])
@@ -382,6 +387,7 @@ def evalSelfSample(
             print(f"Edit number {edit_number}")
             print(f"Model number {model_number}")
             edit_package, edit_locs, gold_tokens = processBatch(batch, lama=lama)
+
             model_edited, logit_hist, ll_change, loss = performOneEdit(
                 model_edited,
                 't5-small' if lama else 'gpt2',
@@ -399,7 +405,7 @@ def evalSelfSample(
 
             norm_diff = orig_params.sub(get_params(model_edited)).norm().item()
 
-            for idx, val in enumerate(logit_hist):
+            for idx, (val, acc) in enumerate(logit_hist):
                 run = (
                     model_number,edit_number,train_step, n_edit_steps, idx, val, 
                     orig_ppl,new_ppl, norm_diff
@@ -570,7 +576,6 @@ if __name__ == "__main__":
 
     ds = 'test' if args.test_set else 'validation'
     
-
     if args.gen:
         dataloader = utils.retrieveEditDataloader(
             tokenizer,

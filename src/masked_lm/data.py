@@ -73,10 +73,9 @@ class LAMADataset(torch.utils.data.IterableDataset):
                 split=datasets.ReadInstruction('train', to=self.pct, unit='%')
             )
 
-        
         templates = list(set(dataset['template']))
         edit_dict = {k: [] for k in templates}
-        for temp, obj in zip(dataset['template'], dataset['obj_surface']):
+        for temp, obj in tqdm(zip(dataset['template'], dataset['obj_surface'])):
             edit_dict[temp].append(obj)
 
         edit_dict = {k: list(set(v)) for k, v in edit_dict.items()}
@@ -86,10 +85,9 @@ class LAMADataset(torch.utils.data.IterableDataset):
         for feat in features:
             data_out[feat] = dataset[feat]
 
-        for idx in tqdm(range(len(dataset))):
-            temp = data_out['template'][idx]
-            obj = data_out['obj_surface'][idx]
-            import ipdb; ipdb.set_trace()
+        for example in tqdm(dataset):
+            temp = example['template']
+            obj = example['obj_surface']
             while True:
                 edit = random.choice(edit_dict[temp])
                 if edit != obj:

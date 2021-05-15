@@ -23,6 +23,7 @@ from masked_lm.data import MaskedLMDataloader
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+
 class BaseTrainer:
     def __init__(self, config, dataloader, model_path=None):
 
@@ -346,7 +347,8 @@ class SelfSampleTrainer(EditTrainer):
 
         self.validation_set = validation
         if self.config.split_params:
-            utils.split_conv_layers(self.model, self.model_name)
+            utils.split_conv_layers(self.model, self.model_name) 
+        
 
     def genModelText(self, lm_tokens):
         
@@ -426,6 +428,7 @@ class SelfSampleTrainer(EditTrainer):
             ppl_pre_hist = []
             ppl_post_hist = []
             ll_change_hist = []
+            accuracy_hist = []
             loss_hist = []
 
             indices = np.random.default_rng(self.val_iter).choice(len(data), 10, replace=False)
@@ -481,12 +484,14 @@ class SelfSampleTrainer(EditTrainer):
                 ppl_pre_hist.append(orig_ppl.cpu())
                 ppl_post_hist.append(new_ppl.cpu())
                 ll_change_hist.append(ll_change)
+                accuracy_hist.append(logit_hist[-1][-1])
                 loss_hist.append(loss.detach().cpu())
 
             metrics = {
                 f'ppl_pre/{ds}': np.mean(ppl_pre_hist),
                 f'ppl_post/{ds}': np.mean(ppl_post_hist),
                 f'll_change/{ds}': np.mean(ll_change_hist),
+                f'accuracy/{ds}': np.mean(accuracy_hist),
                 f'eval_loss/{ds}': np.mean(loss_hist),
             }
             self.wandb_log(self.val_iter * self.config.val_interval, metrics)
