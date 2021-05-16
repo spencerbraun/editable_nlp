@@ -660,8 +660,10 @@ class SelfSampleTrainer(EditTrainer):
                 if self.config.split_params:
                     info_dict["grad/phi"] = torch.nn.utils.clip_grad_norm_(self.model.phi(), 50)
                     info_dict["grad/theta"] = torch.nn.utils.clip_grad_norm_(self.model.theta(), 50)
+                    info_dict['grad/lrs'] = nn.utils.clip_grad_norm_(self.lrs, 50).item()
                 else:
                     info_dict["grad/all"] = torch.nn.utils.clip_grad_norm_(self.model.parameters(), 50)
+                    info_dict['grad/lrs'] = nn.utils.clip_grad_norm_(self.lrs, 50).item()
                 
                 self.echo(train_step, **info_dict)
                 info_dict.update({f"lr/lr{i}":lr.data.item() for i, lr in enumerate(self.lrs)})

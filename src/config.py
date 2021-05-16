@@ -59,12 +59,12 @@ class T5Config:
         self.inner_loop = 'template' #sentence, template, or random
         self.max_val_len = 2000
         
-        self.inner_lr = 1e-3
+        self.inner_lr = 1e-2
         self.outer_lr = 1e-5
         self.epochs = 1
-        self.max_iter = 20000
+        self.max_iter = 40000
         self.n_edit_steps = 1
-        self.cedit = 10
+        self.cedit = 5
         self.cloc = 10
         self.learnable_lr = True
         self.lr_lr = 1e-3
