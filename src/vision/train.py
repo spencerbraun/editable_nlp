@@ -4,17 +4,15 @@ import time
 import random
 import copy
 from datetime import datetime
-import itertools
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.autograd as A
-from torch.utils.data import DataLoader, RandomSampler, Subset, random_split
+from torch.utils.data import DataLoader, Subset, random_split
 import torchvision
 from torchvision.models import resnet18, densenet169
-import higher
 
 from omegaconf import DictConfig, OmegaConf, open_dict
 import hydra
@@ -22,7 +20,7 @@ import hydra
 import wandb
 import vision.utils as utils
 from vision.data_process import loadCIFAR, loadImageNet
-from vision.evaluate import accuracy, get_logprobs, editGenerator, performEdits
+from vision.evaluate import accuracy, editGenerator, performEdits
 from alg.senn_conditional import ConditionalLinearWrapper
 
 eps = np.finfo(np.float32).eps.item()
@@ -89,7 +87,7 @@ class BaseTrainer:
         if not self.config.silent:
             print((
                 f"Epoch: {self.epoch}; TrainStep {train_step}; ",
-                f"; ".join([f"{key} {val}" for key,val in kwargs.items()])
+                "; ".join([f"{key} {val}" for key,val in kwargs.items()])
             ))
     
     def verbose_echo(self, message):
@@ -258,8 +256,8 @@ class EditTrainer(BaseTrainer):
 
 
     def configure_data(self, train_set, val_set):
-        n_train_edit_examples = len(train_set) // 10
-        n_val_edit_examples = len(val_set) // 10
+        n_train_edit_examples = len(train_set) // 10 # NOTE
+        n_val_edit_examples = len(val_set) // 10     # NOTE
         self.train_set, train_edit_data = random_split(train_set, [len(train_set) - n_train_edit_examples, n_train_edit_examples])
         self.val_set, val_edit_data = random_split(val_set, [len(val_set) - n_val_edit_examples, n_val_edit_examples])
 
@@ -290,6 +288,7 @@ class EditTrainer(BaseTrainer):
         for n, p in self.model.named_parameters():
             p_cache[n] = p.data.detach().clone()
 
+        self.model.eval()  # Use running statistics for edits and locality loss
         for edit_example_idx in range(self.config.n_edits):
             edit_inputs, edit_labels = next(self.train_edit_gen)
             edit_inputs, edit_labels = edit_inputs.to(self.device), edit_labels.to(self.device)
@@ -307,7 +306,6 @@ class EditTrainer(BaseTrainer):
             sum_l_edit += l_edit.item() / self.config.n_edits
             self.verbose_echo(f"Computed edit loss: {l_edit}")
 
-            model_edited.train()  # Use batch statistics for locality loss
             with torch.no_grad():
                 loc_logits = self.model(loc_inputs)
             edited_loc_logits = model_edited(loc_inputs)
@@ -349,6 +347,7 @@ class EditTrainer(BaseTrainer):
             p.data = p_cache[n]
 
         # Compute base loss
+        self.model.train()  # Use batch stats for base loss
         l_base, base_logits = self.compute_base_loss(self.model, base_inputs, base_labels)
         l_base *= self.config.cbase
         l_base.backward()
@@ -383,7 +382,10 @@ class EditTrainer(BaseTrainer):
             info_dict['grad/theta'] = nn.utils.clip_grad_norm_(self.model.theta(), 50).item()
         else:
             info_dict['grad/all'] = nn.utils.clip_grad_norm_(self.model.parameters(), 50).item()
-        info_dict['grad/lrs'] = nn.utils.clip_grad_norm_(self.lrs, 50).item()
+        if self.config.lr_grad_clip:
+            info_dict['grad/lrs'] = nn.utils.clip_grad_norm_(self.lrs, self.config.lr_grad_clip).item()
+        else:
+            info_dict['grad/lrs'] = torch.cat([lr.grad.flatten() for lr in self.lrs]).norm().detach()
 
         print('Train step {}\tLoss: {:.2f}\tEdit success: {:.2f}\tPre-edit top-1 acc: {:.2f}\tPost-edit top-1 acc: {:.2f}\t' \
                 'Pre-edit top-5 acc: {:.2f}\tPost-edit top-5 acc: {:.2f}'.format(
@@ -422,7 +424,7 @@ class EditTrainer(BaseTrainer):
                 base_inputs, loc_inputs = torch.split(inputs, [(inputs.shape[0] + 1) // 2, inputs.shape[0] // 2])
                 base_labels, loc_labels = torch.split(labels, [(labels.shape[0] + 1) // 2, labels.shape[0] // 2])
                 edit_inputs, edit_labels = next(self.val_edit_gen)
-                self.verbose_echo(f"Generated edit example")
+                self.verbose_echo("Generated edit example")
 
                 base_inputs, base_labels = base_inputs.to(self.device), base_labels.to(self.device)
                 loc_inputs, loc_labels = loc_inputs.to(self.device), loc_labels.to(self.device)
@@ -505,12 +507,22 @@ class EditTrainer(BaseTrainer):
             torch.save(self.config, self.hyperspath)
 
         if self.config.weight_decay:
-            self.opt = torch.optim.Adam([
-                {'params': self.model.theta()},
-                {'params': self.model.phi(), 'weight_decay': 0.1}
-            ], lr=self.config.outer_lr)
+            if self.config.split_params:
+                self.opt = torch.optim.Adam([
+                    {'params': self.model.theta()},
+                    {'params': self.model.phi(),'weight_decay': self.config.weight_decay}
+                ], lr=self.config.outer_lr)
+            else:
+                self.opt = torch.optim.Adam(
+                    self.model.parameters(),
+                    lr=self.config.outer_lr,
+                    weight_decay=self.config.weight_decay
+                )
         else:
-            self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config.outer_lr)
+            self.opt = torch.optim.Adam(
+                self.model.parameters(),
+                lr=self.config.outer_lr
+            )
         self.scheduler = None
         self.lrs = [
             torch.nn.Parameter(torch.tensor(self.config.inner_lr)) 

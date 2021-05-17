@@ -5,6 +5,7 @@ silent: False
 model_path: null
 n_edits: 1
 cbase: 1
-weight_decay: false
+lr_grad_clip: null
+weight_decay: null
 defaults:
   - experiment: base_cifar_resnet

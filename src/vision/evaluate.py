@@ -134,27 +134,28 @@ def performEdits(
         )
     )
 
-    with torch.enable_grad(), higher.innerloop_ctx(
-        model,
-        inner_opt,
-        override={'lr': lrs} if lrs else None,
-        copy_initial_weights=False,
-        track_higher_grads=(mode == "train")
-    ) as (fmodel, diffopt):
-        fmodel.eval()
-        lp_hist.append(get_logprobs(fmodel, edit_inputs, edit_labels).exp())
+    with torch.enable_grad():
+        with higher.innerloop_ctx(
+            model,
+            inner_opt,
+            override={'lr': lrs} if lrs else None,
+            copy_initial_weights=False,
+            track_higher_grads=(mode == "train")
+        ) as (fmodel, diffopt):
+            fmodel.eval()
+            lp_hist.append(get_logprobs(fmodel, edit_inputs, edit_labels).exp())
 
-        for edit_step in range(n_edit_steps):
-            if split_params:
-                fmodel.set_editing(True)
-            edit_logits = fmodel(edit_inputs)
-            loss = F.cross_entropy(edit_logits, edit_labels)
-            if split_params:
-                fmodel.set_editing(False)
+            for edit_step in range(n_edit_steps):
+                if split_params:
+                    fmodel.set_editing(True)
+                edit_logits = fmodel(edit_inputs)
+                loss = F.cross_entropy(edit_logits, edit_labels)
+                if split_params:
+                    fmodel.set_editing(False)
 
-            diffopt.step(loss, grad_callback=callback)
-            lp = get_logprobs(fmodel, edit_inputs, edit_labels)
-            lp_hist.append(lp.exp())
+                diffopt.step(loss, grad_callback=callback)
+                lp = get_logprobs(fmodel, edit_inputs, edit_labels)
+                lp_hist.append(lp.exp())
 
     edit_logits = fmodel(edit_inputs)
     l_edit = F.cross_entropy(edit_logits, edit_labels)
