@@ -5,19 +5,19 @@ model: resnet18
 pretrained: False
 model_path: models/cifar/resnet18/finetune/finetune_epoch199_ts9999.20210429.19.04.1619750982
 dataset: cifar10
-num_classes: 10
 bs: 128
 
 epochs: 10
 loss: cross_entropy
 outer_lr: 1.0e-4
-inner_lr: 1.0e-3
+inner_lr: 1.0e-1
 n_edit_steps: 5
 edit_bs: 16
-cedit: 0.01
-cloc: 1
+n_edits: 1
+cedit: 5
+cloc: 50
 learnable_lr: True
 lr_lr: 1.0e-3
 lr_grad_clip: 50
-split_params: False
+split_params: True
 

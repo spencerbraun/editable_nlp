@@ -1,3 +1,4 @@
+import argparse
 import os
 import glob
 import time
@@ -8,7 +9,7 @@ import itertools
 import numpy as np
 
 from omegaconf import DictConfig, OmegaConf
-import hydra
+from hydra.experimental import compose, initialize_config_dir
 
 import torch
 import torch.nn.functional as F
@@ -194,14 +195,14 @@ def evaluateOnDataset(model, dataset):
 def evalEditable(
     model,
     dataset,
-    model_name,
-    config,
-    loc='../..'
+    config
 ):
 
-    timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
-    filename = f"edit_success_{timestamp}_{os.path.basename(model_name)}"
-    saveloc = f"{loc}/eval/{filename}"
+    savedir = os.path.join(config.run_dir, 'eval')
+    if not os.path.exists(savedir):
+        os.makedirs(savedir)
+    filename = f"edit_success_{os.path.basename(config.checkpoint_path)}"
+    saveloc = os.path.join(savedir, filename)
 
     n_edits = 0
     edit_number = 0
@@ -213,8 +214,9 @@ def evalEditable(
     orig_params = get_params(original_model)
 
     try:
-        lrs = loadLr(model_name)
+        lrs = loadLr(config.checkpoint_path)
     except AttributeError:
+        print("Did not load lrs")
         lrs = []
 
     try:
@@ -303,16 +305,13 @@ def evalEditable(
     print(f"Logged to {saveloc}")
 
 
-@hydra.main(config_path='config/evaluate', config_name='config')
 def main(config: DictConfig):
     print(OmegaConf.to_yaml(config))
 
     loc = utils.sailPreprocess()
-
     dataset = loadCIFAR(loc, 'val') if config.dataset == 'cifar10' else loadImageNet(loc, 'val')
     num_classes = len(dataset.classes)
 
-    model_path = os.path.join(loc, f"models/{config.model}_pretrained")
     load_model = densenet169 if config.model == 'densenet169' else resnet18
     model = utils.loadOTSModel(load_model, num_classes, config.pretrained)
 
@@ -328,24 +327,41 @@ def main(config: DictConfig):
         ConditionalLinearWrapper.wrap_model(model, n_hidden, -3, basic_block_predicate)
 
     if not config.pretrained and not OmegaConf.is_missing(config, 'model_path'):
-        model_path = os.path.join(loc, config.model_path)
+        model_path = config.checkpoint_path
         model.load_state_dict(torch.load(model_path))
         print(f"Loaded model weights from {model_path}")
-
 
     evalEditable(
         model,
         dataset,
-        model_path,
-        config,
-        loc
+        config
     )
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-C', '--checkpoint_path', type=str, help='(Relative or absolute) path of the checkpoint')
+    parser.add_argument('-S', '--seq_edits', type=int, default=100)
+    args = parser.parse_args()
+
+    checkpoint_path = os.path.abspath(args.checkpoint_path)
+    checkpoint = os.path.basename(checkpoint_path)  # /path/to/run_dir/checkpoints/checkpoint.pth
+    checkpoints_dir = os.path.dirname(checkpoint_path)
+    run_dir = os.path.dirname(checkpoints_dir)
+
+    config_dir = os.path.join(run_dir, '.hydra')
+    initialize_config_dir(config_dir=config_dir, job_name='evaluate')
+    config = compose(config_name='config', overrides=[
+        f"+run_dir={run_dir}",
+        f"+checkpoint_path={checkpoint_path}",
+        f"+seq_edits={args.seq_edits}"
+    ])
+
     random.seed(123)
     np.random.seed(123)
     torch.manual_seed(123)
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True)
 
-    main()
+    main(config)
 

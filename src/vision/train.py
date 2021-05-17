@@ -31,18 +31,17 @@ class BaseTrainer:
 
         # config
         self.config = config
+        run_dir = os.getcwd()
 
-        self.model_dir = (
-            f'{self.config.write_loc}/models/{self.config.dataset}/{self.config.model}/finetune' if self.config.task == 'finetune'
-            else f'{self.config.write_loc}/models'
-        )
+        self.model_dir = os.path.join(run_dir, 'models')
+        if not os.path.exists(self.model_dir):
+            os.makedirs(self.model_dir)
 
         num_classes = len(train_set.classes)
-
         load_model = densenet169 if config.model == 'densenet169' else resnet18
         self.model = utils.loadOTSModel(load_model, num_classes, self.config.pretrained)
         if not self.config.pretrained and self.config.model_path:
-            model_path = os.path.join(self.config.write_loc, self.config.model_path)
+            model_path = os.path.join(self.config.loc, self.config.model_path)
             self.model.load_state_dict(torch.load(model_path))
             print(f"Loaded model weights from {model_path}")
         self.original_model = copy.deepcopy(self.model)
@@ -50,9 +49,9 @@ class BaseTrainer:
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         # outfiles
-        self.timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
+        self.timestamp = datetime.now().strftime("%Y-%m-%d.%H-%m-%S")
         self.hyperspath = f"{self.model_dir}/hypers.{self.timestamp}"
-        self.errpath = f"{self.config.write_loc}/errors/errors_{self.timestamp}"
+        self.errpath = f"{run_dir}/errors/errors_{self.timestamp}"
         self.statepath = (
             lambda model, epoch, step: 
             f"{self.model_dir}/{model}_epoch{epoch}_ts{step}.{self.timestamp}"
@@ -66,7 +65,7 @@ class BaseTrainer:
                 entity='patchable-lm',
                 config=self.config,
                 name=f"{self.config.dataset}/{self.config.model}/{self.config.task}_{self.timestamp}",
-                dir=self.config.write_loc,
+                dir=self.config.loc,
             )
 
     def saveState(self, state_obj, train_step, name="finetune", final=False):
@@ -588,18 +587,17 @@ class EditTrainer(BaseTrainer):
             self.saveState(self.lrs, self.global_iter, final=True, name='lr')
 
 
-@hydra.main(config_path='config/train', config_name='config')
+@hydra.main(config_path='config', config_name='config')
 def main(config: DictConfig):
     print(OmegaConf.to_yaml(config))
 
     loc = utils.sailPreprocess()
-
     train_set = loadCIFAR(loc, 'train') if config.dataset == 'cifar10' else loadImageNet(loc, 'train')
     val_set = loadCIFAR(loc, 'val') if config.dataset == 'cifar10' else loadImageNet(loc, 'val')
 
     OmegaConf.set_struct(config, True)
     with open_dict(config):
-        config.write_loc = loc
+        config.loc = loc
 
     if config.task == 'editable':
         trainer = EditTrainer(config, train_set, val_set)

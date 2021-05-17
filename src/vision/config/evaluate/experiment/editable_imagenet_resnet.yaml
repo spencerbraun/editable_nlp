@@ -1,8 +1,0 @@
-# @package _global_
-
-dataset: imagenet
-model: resnet18
-pretrained: False
-model_path: models/resnet18_epoch1_ts20000.20210504.00.05.1620113071
-n_edit_steps: 10
-seq_edits: 100

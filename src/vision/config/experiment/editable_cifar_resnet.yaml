@@ -1,13 +1,22 @@
 # @package _global_
 
-dataset: cifar10
+task: editable
 model: resnet18
 pretrained: False
 model_path: models/cifar/resnet18/finetune/finetune_epoch199_ts9999.20210429.19.04.1619750982
+dataset: cifar10
+bs: 128
 
+epochs: 10
+loss: cross_entropy
+outer_lr: 1.0e-4
+inner_lr: 1.0e-1
 n_edit_steps: 5
 edit_bs: 16
-seq_edits: 200
-
 cedit: 0.1
 cloc: 1
+learnable_lr: True
+lr_lr: 1.0e-3
+lr_grad_clip: 50
+split_params: False
+

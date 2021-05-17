@@ -8,6 +8,6 @@
 
 script=$1
 
-source env/bin/activate
-echo "python3 src/vision/${script}.py experiment=base_imagenet_resnet"
-python3 src/vision/${script}.py experiment=base_imagenet_resnet
+source ../env/bin/activate
+echo "CUBLAS_WORKSPACE_CONFIG=:16:8 python3 -m vision.${script} experiment=base_imagenet_resnet"
+CUBLAS_WORKSPACE_CONFIG=:16:8 python3 -m vision.${script} experiment=base_imagenet_resnet

@@ -4,7 +4,6 @@ task: editable
 model: densenet169
 pretrained: True
 dataset: imagenet
-num_classes: 1000
 bs: 128
 
 epochs: 2
