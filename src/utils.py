@@ -47,7 +47,7 @@ def loadOTSModel(name='gpt2', cache_dir=None):
         tokenizer = GPT2Tokenizer.from_pretrained(
             name, cache_dir=f"{cache_dir}/hf" if cache_dir else None
             )
-    
+
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "left"
     elif name == 't5-small':
@@ -65,10 +65,10 @@ def loadTokenizer(name='gpt2', cache_dir=None):
         tokenizer = GPT2Tokenizer.from_pretrained(
             name, cache_dir=f"{cache_dir}/hf" if cache_dir else None
         )
-    
+
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "left"
-        
+
     elif name == 't5-small':
         tokenizer = T5Tokenizer.from_pretrained(
             't5-small', cache_dir=f"{cache_dir}/hf" if cache_dir else None
@@ -87,8 +87,8 @@ def _getFileIds(data_loc, self_sample, dataset, max_obs):
         )
     else:
         writtenFiles = (
-            glob.glob(f"{data_path}/train/permuted*") if dataset == 'train' 
-            else glob.glob(f"{data_path}/valid/original*") if dataset == 'validation' 
+            glob.glob(f"{data_path}/train/permuted*") if dataset == 'train'
+            else glob.glob(f"{data_path}/valid/original*") if dataset == 'validation'
             else glob.glob(f"{data_path}/test/original*")
         )
 
@@ -99,10 +99,10 @@ def _getFileIds(data_loc, self_sample, dataset, max_obs):
 
 
 def retrieveEditDataloader(
-    tokenizer, 
-    bs=10, 
+    tokenizer,
+    bs=10,
     data_loc='..',
-    dataset='train', 
+    dataset='train',
     max_obs=float('inf'),
     shuffle=False,
     self_sample=False,
@@ -129,10 +129,10 @@ def retrieveEditDataloader(
 
 
 def retrieveUnifiedDataset(
-    tokenizer, 
-    bs=10, 
+    tokenizer,
+    bs=10,
     data_loc='..',
-    dataset='train', 
+    dataset='train',
     max_obs=float('inf'),
     shuffle=False,
     self_sample=False,
@@ -150,18 +150,18 @@ def retrieveUnifiedDataset(
 
 
 def wikiDataloader(
-    tokenizer, 
-    bs=10, 
+    tokenizer,
+    bs=10,
     data_loc='..',
     dataset='train',
     shuffle=False,
     max_length=200,
     min_length=20
     ):
-    
-    tokenizer.padding_side = "left" 
+
+    tokenizer.padding_side = "left"
     tokenizer.pad_token = tokenizer.eos_token
-    
+
     def pad_collate(batch):
         toks = tokenizer(
                 batch,
@@ -170,14 +170,14 @@ def wikiDataloader(
                 padding=True
             )
         return (
-            torch.tensor(toks['input_ids']), 
+            torch.tensor(toks['input_ids']),
             torch.tensor(toks['attention_mask'])
         )
 
     ds = WikitextDataset(
-        data_loc=f"{data_loc}/hf", 
+        data_loc=f"{data_loc}/hf",
         dataset=dataset,
-        pct=100, 
+        pct=100,
         min_length=min_length
     )
     dataloader = torch.utils.data.DataLoader(
@@ -200,6 +200,11 @@ def split_conv_layers(model, name):
         )
         ConditionalLinearWrapper.wrap_model(model, model.config.n_embd, -1, conv_predicate)
     elif name == 't5-small':
+#         conv_predicate = lambda mod: (
+#             isinstance(mod, torch.nn.Linear) and
+#             mod.weight.shape[0] == model.config.d_model and
+#             mod.weight.shape[1] != model.config.d_model
+#         )
         conv_predicate = lambda mod: (
             isinstance(mod, transformers.models.t5.modeling_t5.T5DenseReluDense)
         )
@@ -214,25 +219,25 @@ def prep_for_maml(model, adapt_all: bool = False):
             else:
                 return list(self.transformer.h[-3:].parameters())
         else:
-            return (list(self.encoder.block[-2:].parameters()) + 
-                    list(self.decoder.block[-2:].parameters()))
-       
+            return (list(self.encoder.block[-3:].parameters()) +
+                    list(self.decoder.block[-3:].parameters()))
+
     type(model).inner_params = _inner_params
 
 
 def loadTrainedModel(
-    modelPath, 
-    name='gpt2', 
-    cache_dir=None, 
-    tokenizer=True, 
-    split_params: bool = False, 
+    modelPath,
+    name='gpt2',
+    cache_dir=None,
+    tokenizer=True,
+    split_params: bool = False,
     adapt_all: bool = False
     ):
     model, tok = loadOTSModel(name=name, cache_dir=cache_dir)
     prep_for_maml(model, adapt_all)
     if split_params:
         split_conv_layers(model, name)
-        
+
     model.load_state_dict(torch.load(modelPath))
     model.eval()
     if not tokenizer:
@@ -277,7 +282,7 @@ def sailPreprocess(debug=False):
         os.mkdir(f"{local_dir}/eval")
         os.mkdir(f"{local_dir}/hf")
         copyfile(
-            "/juice/scr/spencerb/editable_nlp/self_sample.zip", 
+            "/juice/scr/spencerb/editable_nlp/self_sample.zip",
             f"{local_dir}/self_sample.zip"
             )
         with zipfile.ZipFile(f"{local_dir}/self_sample.zip") as zf:

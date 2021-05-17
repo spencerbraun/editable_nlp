@@ -50,15 +50,15 @@ class SelfSampleGPT2Config:
         self.ft_model_name = "gpt2_epoch0_ts10000.20210408.09.04.1617899457"
 
         self.silent = False
-        
-        
-class T5Config:
+
+
+class T5LAMAConfig:
     def __init__(self):
         self.task = 't5_lama'
-        self.model_name = 't5-small' #t5-small or gpt2
+        self.model_name = 't5-small'
         self.inner_loop = 'template' #sentence, template, or random
         self.max_val_len = 2000
-        
+
         self.inner_lr = 1e-2
         self.outer_lr = 1e-5
         self.epochs = 1
@@ -73,5 +73,28 @@ class T5Config:
         self.model_save_pt = 5000
         self.write_loc = '..'
         self.ft_model_name = "T5_finetune_epoch0_ts20000.20210505.09.05.1620232583"
+
+        self.silent = False
+
+
+class T5KILTConfig:
+    def __init__(self):
+        self.task = 't5_kilt'
+        self.model_name = 't5-small'
+
+        self.inner_lr = 1e-2
+        self.outer_lr = 1e-5
+        self.epochs = 1
+        self.max_iter = 40000
+        self.n_edit_steps = 1
+        self.cedit = 1
+        self.cloc = 1
+        self.learnable_lr = True
+        self.lr_lr = 1e-3
+
+        self.debug = False
+        self.model_save_pt = 5000
+        self.write_loc = '..'
+        self.ft_model_name = "T5_kilt_finetune_epoch0_ts20000.20210517.10.05.1621272868"
 
         self.silent = False
