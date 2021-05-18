@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-from typing import Callable, List
+from typing import Callable, List, Union
+import inspect
 
 
 def filter_inner_params(params: List[nn.Parameter]):
@@ -11,7 +12,7 @@ class ConditionalLinearWrapper(nn.Module):
     @staticmethod
     def wrap_model(
         model: nn.Module,
-        n_hidden: int,
+        n_hidden: Union[int, Callable],
         dim: int,
         predicate: Callable[[nn.Module], bool],
     ):
@@ -19,7 +20,8 @@ class ConditionalLinearWrapper(nn.Module):
             n_wrapped = 0
             for idx, (name, mod) in enumerate(module.named_children()):
                 if predicate(mod):
-                    setattr(module, name, ConditionalLinearWrapper(mod, n_hidden, dim))
+                    num_hidden = n_hidden(mod) if isinstance(n_hidden, Callable) else n_hidden
+                    setattr(module, name, ConditionalLinearWrapper(mod, num_hidden, dim))
                     n_wrapped += 1
                 else:
                     n_wrapped += _recursive_apply(mod)
@@ -28,7 +30,7 @@ class ConditionalLinearWrapper(nn.Module):
 
         # Recursively replace each nn.Linear in the model with a ConditionerLinear
         n_wrapped = _recursive_apply(model)
-        print(f"Wrapped {n_wrapped} modules for predicate {predicate}")
+        print(f"Wrapped {n_wrapped} modules using predicate:\n{inspect.getsource(predicate)}")
 
         # A convenience function to enable/disable editing
         def _set_editing(self, active: bool):
@@ -90,14 +92,28 @@ class ConditionalLinearWrapper(nn.Module):
     def set_active(self, active: bool):
         self.active = active
 
-    def forward(self, x):
-        out = self.wrapped(x)
+    def forward(self, *args, **kwargs):
+        out = self.wrapped(*args, **kwargs)
         if self.active:
-            out = (
-                (out.movedim(self.dim, -1) @ self.weight)
-                .movedim(-1, self.dim)
-                .contiguous()
-            )
+            if not isinstance(out, torch.Tensor):
+                x = out[0]
+            else:
+                x = out
+
+            try:
+                x = (
+                    (x.movedim(self.dim, -1) @ self.weight)
+                    .movedim(-1, self.dim)
+                    .contiguous()
+                )
+            except Exception as e:
+                print(e)
+                breakpoint()
+
+            if not isinstance(out, torch.Tensor):
+                out = (x,) + out[1:]
+            else:
+                out = x
 
         return out
 

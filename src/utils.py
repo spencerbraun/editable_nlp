@@ -7,8 +7,9 @@ import math
 import glob
 import numpy as np
 import torch
+import torch.nn as nn
 import transformers
-from transformers import GPT2Tokenizer, GPT2LMHeadModel, T5Tokenizer, T5ForConditionalGeneration
+from transformers import GPT2Tokenizer, GPT2LMHeadModel, T5Tokenizer, T5ForConditionalGeneration, BartTokenizer, BartForConditionalGeneration
 from data_process import TorchDataset, WikitextDataset, NTokenDataset
 
 from alg.senn_conditional import ConditionalLinearWrapper
@@ -57,6 +58,13 @@ def loadOTSModel(name='gpt2', cache_dir=None):
         tokenizer = T5Tokenizer.from_pretrained(
             't5-small', cache_dir=f"{cache_dir}/hf" if cache_dir else None
             )
+    elif name == 'bart-base':
+        model = BartForConditionalGeneration.from_pretrained(
+            "facebook/bart-base", cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        )
+        tokenizer = BartTokenizer.from_pretrained(
+            "facebook/bart-base", cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        )
 
     return model, tokenizer
 
@@ -72,7 +80,11 @@ def loadTokenizer(name='gpt2', cache_dir=None):
     elif name == 't5-small':
         tokenizer = T5Tokenizer.from_pretrained(
             't5-small', cache_dir=f"{cache_dir}/hf" if cache_dir else None
-            )
+        )
+    elif name == 'bart-base':
+        tokenizer = BartTokenizer.from_pretrained(
+            "facebook/bart-base", cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        )
 
     return tokenizer
 
@@ -192,53 +204,63 @@ def wikiDataloader(
     return dataloader
 
 
-def split_conv_layers(model, name):
+def wrap_model(model, name):
     # find Conv1D layers to replace (they annoyingly have transposed weights)
     if name == 'gpt2':
-        conv_predicate = lambda mod: (
+        module_predicate = lambda mod: (
             isinstance(mod, transformers.models.gpt2.modeling_gpt2.Conv1D) and mod.weight.shape[1] == 768
         )
-        ConditionalLinearWrapper.wrap_model(model, model.config.n_embd, -1, conv_predicate)
+        n_hidden = model.config.n_embd
+    elif name == 'bart-base':
+        module_predicate = lambda mod: (
+            isinstance(mod, transformers.models.bart.modeling_bart.BartDecoderLayer) or
+            isinstance(mod, transformers.models.bart.modeling_bart.BartEncoderLayer)
+        )
+        n_hidden = model.config.d_model
     elif name == 't5-small':
-#         conv_predicate = lambda mod: (
-#             isinstance(mod, torch.nn.Linear) and
-#             mod.weight.shape[0] == model.config.d_model and
-#             mod.weight.shape[1] != model.config.d_model
-#         )
-        conv_predicate = lambda mod: (
+        module_predicate = lambda mod: (
             isinstance(mod, transformers.models.t5.modeling_t5.T5DenseReluDense)
         )
-        ConditionalLinearWrapper.wrap_model(model, model.config.d_model, -1, conv_predicate)
+        n_hidden = model.config.d_model
+    else:
+        raise ValueError(f"Invalid model type `{name}` specified")
+
+    ConditionalLinearWrapper.wrap_model(model, n_hidden, -1, module_predicate)
 
 def prep_for_maml(model, adapt_all: bool = False):
     # Default inner loop adaptation parameters
     def _inner_params(self):
-        if hasattr(self, 'transformer'):
+        if hasattr(self, 'transformer'): # gpt2
             if adapt_all:
                 return list(self.transformer.h.parameters())
             else:
                 return list(self.transformer.h[-3:].parameters())
-        else:
-            return (list(self.encoder.block[-3:].parameters()) +
+        elif hasattr(self, 'model'): # bart
+            return (list(self.model.encoder.layers[-3:].parameters()) + 
+                    list(self.model.decoder.layers[-3:].parameters()))
+        else: # t5
+            return (list(self.encoder.block[-3:].parameters()) + 
                     list(self.decoder.block[-3:].parameters()))
 
     type(model).inner_params = _inner_params
 
 
 def loadTrainedModel(
-    modelPath,
-    name='gpt2',
-    cache_dir=None,
-    tokenizer=True,
-    split_params: bool = False,
+    modelPath=None, 
+    name='gpt2', 
+    cache_dir=None, 
+    tokenizer=True, 
+    split_params: bool = False, 
     adapt_all: bool = False
     ):
     model, tok = loadOTSModel(name=name, cache_dir=cache_dir)
     prep_for_maml(model, adapt_all)
-    if split_params:
-        split_conv_layers(model, name)
 
-    model.load_state_dict(torch.load(modelPath))
+    try:
+        model.load_state_dict(torch.load(modelPath))
+    except Exception as e:
+        print(f"Couldn't load pre-trained weights for model: {e}; continuing with OTS weights")
+    
     model.eval()
     if not tokenizer:
         return model

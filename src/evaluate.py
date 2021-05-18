@@ -119,8 +119,8 @@ def loadLr(model_path):
     return lrs
 
 def performOneEdit(
-    model,
-    model_name,
+    model, 
+    task,
     lrs,
     edit_package,
     edit_locs,
@@ -139,10 +139,10 @@ def performOneEdit(
     ]
     inner_opt = (torch.optim.SGD(param_groups))
 
-    if model_name == 'gpt2':
+    if task == 'gen':
         edit_tokens, edit_mask, edit_labels = edit_package
         idxProbs = getIndexedProbs
-    elif model_name == 't5-small':
+    elif task == 'cloze':
         (
             edit_tokens, edit_mask, edit_labels,
             edit_template, edit_temp_mask, edit_labels
@@ -153,7 +153,7 @@ def performOneEdit(
     logit_hist = []
     logit_hist.append(
         idxProbs(model, edit_locs, gold_tokens, edit_tokens,
-        None if model_name == 'gpt2' else edit_labels),
+        None if task == 'gen' else edit_labels),
     )
 
     with higher.innerloop_ctx(
@@ -179,17 +179,17 @@ def performOneEdit(
 
             logit_hist.append(
                 idxProbs(fmodel, edit_locs, gold_tokens, edit_tokens,
-                None if model_name == 'gpt2' else edit_labels),
+                None if task == 'gen' else edit_labels),
             )
 
-            ll_change = (abs(logit_hist[0][0]) - abs(logit_hist[-1][0]))/abs(logit_hist[0][0])
-            print(f"logit history: {logit_hist}")
-            print(f"Edit step {edit_step}; ll change {ll_change} , logit {logit_hist[-1][0]}, loss {output.loss}")
+        prob_change = logit_hist[-1][0].exp() - logit_hist[0][0].exp()
+        print(f"prob history: {[l[0].exp() for l in logit_hist]}")
+        print(f"Edit step {edit_step}; prob change {prob_change}; logit {logit_hist[-1][0]}; loss {output.loss}")
 
     edited_model = copy.deepcopy(model)
     edited_model.load_state_dict(fmodel.state_dict())
 
-    return edited_model, logit_hist, ll_change, output.loss
+    return edited_model, logit_hist, prob_change, output.loss
 
 def genModelText(finetuned, lm_tokens):
 
@@ -389,7 +389,7 @@ def evalSelfSample(
 
             model_edited, logit_hist, ll_change, loss = performOneEdit(
                 model_edited,
-                't5-small' if lama else 'gpt2',
+                'cloze' if lama else 'gen',
                 lrs,
                 edit_package,
                 edit_locs,
@@ -563,13 +563,14 @@ if __name__ == "__main__":
     parser.add_argument('--split_params', action='store_true')
     parser.add_argument('--edit_steps', default=5, type=int)
     parser.add_argument('--seq_edits', default=1, type=int)
+    parser.add_argument('--model', type=str, default='bart-base')
     parser.add_argument('--copy_to')
     args = parser.parse_args()
 
     loc = utils.sailPreprocess()
 
-    if args.model_path:
-        name = 'gpt2' if args.gen else 't5-small'
+    if args.model_path: 
+        name = args.model if args.lama else 'gpt2'
         print(f"Using model {name}")
         model, tokenizer = utils.loadTrainedModel(args.model_path, name=name, cache_dir=loc,
                                                   split_params=args.split_params)

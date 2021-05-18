@@ -53,14 +53,14 @@ class BaseTrainer:
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         if not self.config.debug:
             wandb.init(
-                project='patchable' if self.model_name == 'gpt2' else 'patchable_masked',
+                project='patchable' if self.config.task == 'gen' else 'patchable_masked',
                 entity='patchable-lm',
                 config=self.config,
                 name=f"{self.config.task}{split}_{self.timestamp}",
                 dir=self.config.write_loc,
             )
             wandb.watch(self.model)
-            transformers.logging.set_verbosity_error()
+            transformers.logging.set_verbosity_info()
 
         self.epoch = 0
 
@@ -348,8 +348,8 @@ class SelfSampleTrainer(EditTrainer):
         self.validation_set = validation
 
         if self.config.split_params:
-            utils.split_conv_layers(self.model, self.model_name)
-
+            utils.wrap_model(self.model, self.model_name) 
+        
 
     def genModelText(self, lm_tokens):
 
@@ -385,7 +385,7 @@ class SelfSampleTrainer(EditTrainer):
         with torch.no_grad():
             for batch_idx, batch in enumerate(dataset):
                 lm_tokens, lm_mask, lm_labels = self.mask_padding(
-                    batch[0], batch[1], batch[2] if self.model_name == 't5-small' else None
+                    batch[0], batch[1], batch[2] if self.config.task == 'cloze' else None
                     )
                 loss = model(lm_tokens, labels=lm_labels).loss
                 acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels))
@@ -394,10 +394,10 @@ class SelfSampleTrainer(EditTrainer):
         return torch.tensor(ppl)
 
     def mask_padding(self, tokens, mask, label=None):
-        if self.model_name == 'gpt2':
+        if self.config.task == 'gen':
             return tokens.to(self.device), mask.to(self.device), tokens.masked_fill(mask == 0, -100).to(self.device)
-        elif self.model_name == 't5-small':
-            return (tokens.to(self.device), mask.to(self.device),
+        elif self.config.task == 'cloze':
+            return (tokens.to(self.device), mask.to(self.device), 
             label.masked_fill(label == self.tokenizer.pad_token_id, -100).to(self.device))
 
     def strip_padding(self, tokens, mask, labels):
@@ -435,10 +435,10 @@ class SelfSampleTrainer(EditTrainer):
             indices = np.random.default_rng(self.val_iter).choice(len(data), 10, replace=False)
             subset = Subset(data, indices)
             for batch_idx, datapack in enumerate(subset):
-                if self.model_name == 'gpt2':
+                if self.config.task == 'gen':
                     (_, _, _, _, _, _, edit_tokens, edit_mask, edit_labels) = datapack
-
-                elif self.model_name == 't5-small':
+                    
+                elif self.config.task == 'cloze':
                     (
                         _, _, _,
                         _, _, _,
@@ -448,19 +448,17 @@ class SelfSampleTrainer(EditTrainer):
                     edit_template = edit_template[:1]
                     edit_temp_mask = edit_temp_mask[:1]
                     edit_template, edit_temp_mask, _ = self.strip_padding(edit_template, edit_temp_mask, edit_labels)
-
-
+                    
                 edit_tokens = edit_tokens[:1]
                 edit_mask = edit_mask[:1]
                 edit_labels = edit_labels[:1]
 
                 edit_tokens, edit_mask, edit_labels = self.strip_padding(edit_tokens, edit_mask, edit_labels)
-
-
-                if self.model_name == 'gpt2':
+                
+                if self.config.task == 'gen':
                     edit_locs, gold_tokens = self.get_edit_locs(edit_tokens, edit_labels)
                     edit_package = (edit_tokens, edit_mask, edit_labels)
-                elif self.model_name == 't5-small':
+                elif self.config.task == 'cloze':
                     edit_locs, gold_tokens = 0, edit_labels.flatten().unsqueeze(0)
                     edit_package = (edit_tokens, edit_mask, edit_labels, edit_template, edit_temp_mask, edit_labels)
 
@@ -472,7 +470,7 @@ class SelfSampleTrainer(EditTrainer):
 
                 model_out, logit_hist, ll_change, loss = performOneEdit(
                     self.model,
-                    self.model_name,
+                    self.config.task,
                     self.lrs,
                     edit_package,
                     edit_locs,
@@ -495,8 +493,9 @@ class SelfSampleTrainer(EditTrainer):
                 f'accuracy/{ds}': np.mean(accuracy_hist),
                 f'eval_loss/{ds}': np.mean(loss_hist),
             }
-            self.wandb_log(self.val_iter * self.config.val_interval, metrics)
-
+            if not self.config.debug:
+                self.wandb_log(self.val_iter * self.config.val_interval, metrics)
+            
         self.val_iter += 1
 
         self.model.train()
@@ -525,11 +524,11 @@ class SelfSampleTrainer(EditTrainer):
             self.epoch = epoch
 
             for train_step, datapack in enumerate(self.data):
-                if self.model_name == 'gpt2':
+                if self.config.task == 'gen':
                     (lm_tokens, lm_mask, loc_tokens, loc_mask, _, _, edit_tokens, edit_mask, edit_labels) = datapack
                     lm_tokens, lm_mask, lm_labels = self.mask_padding(lm_tokens, lm_mask)
                     loc_tokens, loc_mask, loc_labels = self.mask_padding(loc_tokens, loc_mask)
-                elif self.model_name == 't5-small':
+                elif self.config.task == 'cloze':
                     (
                         lm_tokens, lm_mask, lm_labels,
                         loc_tokens, loc_mask, loc_labels,
@@ -584,12 +583,13 @@ class SelfSampleTrainer(EditTrainer):
                                 fmodel.set_editing(False)
                             diffopt.step(loss)
 
-                        if self.model_name == 't5-small':
+                        if self.config.task == 'cloze':
                             edit_tokens_, edit_mask_, edit_labels_ = (
                             self.strip_padding(edit_tokens[edit_example_idx],
                                                edit_mask[edit_example_idx],
                                                edit_labels[edit_example_idx])
                             )
+
                         edit_out = fmodel(
                             edit_tokens_,
                             attention_mask=edit_mask_,
@@ -686,8 +686,8 @@ class SelfSampleTrainer(EditTrainer):
                     if self.config.learnable_lr:
                         lr_opt.step()
                         lr_opt.zero_grad()
-
-                if (train_step % self.config.val_interval == 0) and (not self.config.debug):
+            
+                if (train_step % self.config.val_interval == 0):
                     self.validateSelfSampleTraining()
 
         self.saveState(self.model, global_iter, final=True, name=self.config.task)
@@ -696,6 +696,12 @@ class SelfSampleTrainer(EditTrainer):
 
 
 if __name__ == "__main__":
+    random.seed(123)
+    np.random.seed(123)
+    torch.manual_seed(123)
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True)
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--editable', action='store_true')
     parser.add_argument('--n_edits', type=int, default=1)
@@ -707,20 +713,24 @@ if __name__ == "__main__":
     parser.add_argument('--bs', default=1, type=int)
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--val_interval', type=int, default=200)
+    parser.add_argument('--outer_lr', type=float, default=None)
+    parser.add_argument('--inner_lr', type=float, default=None)
+    parser.add_argument('--cedit', type=float, default=None)
+    parser.add_argument('--cloc', type=float, default=None)
+    parser.add_argument('--model', type=str, default='bart-base')
     args = parser.parse_args()
 
     loc = utils.sailPreprocess()
     tokenizer = utils.loadTokenizer(
-        name= 't5-small' if not args.gen else 'gpt2',
+        name= 'gpt2' if not args.lama else args.model,
         cache_dir=loc)
 
     config = (
         TrainConfig() if args.finetune else
         EditConfig() if args.editable else
         SelfSampleGPT2Config() if args.gen else
-        T5LAMAConfig() if args.lama else
-        T5KILTConfig()
-
+        ClozeBartConfig() if args.model == 'bart-base' else
+        ClozeT5Config() 
     )
     config.write_loc = loc
     config.bs = args.bs
@@ -728,6 +738,18 @@ if __name__ == "__main__":
     config.split_params = args.split_params
     config.debug = args.debug if args.debug else config.debug
     config.val_interval = args.val_interval
+    if args.outer_lr is not None:
+        print(f"Overriding default outer_lr {config.outer_lr} with new value {args.outer_lr}")
+        config.outer_lr = args.outer_lr
+    if args.inner_lr is not None:
+        print(f"Overriding default inner_lr {config.inner_lr} with new value {args.inner_lr}")
+        config.inner_lr = args.inner_lr
+    if args.cedit is not None:
+        print(f"Overriding default cedit {config.cedit} with new value {args.cedit}")
+        config.cedit = args.cedit
+    if args.cloc is not None:
+        print(f"Overriding default cloc {config.cloc} with new value {args.cloc}")
+        config.cloc = args.cloc
 
     if (args.editable or args.gen):
         train = utils.retrieveUnifiedDataset(
