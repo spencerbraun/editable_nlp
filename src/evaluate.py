@@ -1,5 +1,5 @@
 import random
-import copy 
+import copy
 import argparse
 import os
 import re
@@ -30,14 +30,14 @@ def get_params(model):
     return torch.cat([p.view(-1) for p in model.parameters()])
 
 def processLAMABatch(tokens, mask, label):
-    return (tokens.to(DEVICE), mask.to(DEVICE), 
+    return (tokens.to(DEVICE), mask.to(DEVICE),
             label.masked_fill(label == 0, -100).to(DEVICE))
 
 def strip_padding(tokens, mask, labels):
     mask_ = tokens != 0
     tokens = tokens[mask_].unsqueeze(0)
     mask = mask[mask_].unsqueeze(0)
-    
+
     label_mask = labels != 0
     labels = labels[label_mask].unsqueeze(0)
 
@@ -78,7 +78,7 @@ def getIndexedProbs(model, index, gold_tokens, sent_tokens, labels):
         output = model(sent_tokens)
         output_lps = F.log_softmax(output.logits, dim=-1)
         logits = output_lps[:,index-1,:].detach().cpu().squeeze(0) #squeeze batch size
-        
+
         gold_tokens = gold_tokens.flatten().unsqueeze_(1)
         logit_sum = torch.sum(logits.gather(1, gold_tokens))
         accuracy = (logits.argmax(-1) == gold_tokens.squeeze()).all(-1).float().mean()
@@ -92,12 +92,11 @@ def getT5IndexedProbs(model, index, gold_tokens, sent_tokens, labels):
         output = model(input_ids=sent_tokens, labels=labels)
         output_lps = F.log_softmax(output.logits, dim=-1)
         logits = output_lps.detach().cpu().squeeze(0) #squeeze batch size
-        
+
         gold_tokens = gold_tokens.flatten().unsqueeze_(1).cpu()
         logit_sum = torch.sum(logits.gather(1, gold_tokens))
-
         accuracy = (output_lps.argmax(-1) == labels).all(-1).float().mean().cpu()
-        
+
     model.train()
     return (logit_sum, accuracy)
 
@@ -120,11 +119,11 @@ def loadLr(model_path):
     return lrs
 
 def performOneEdit(
-    model, 
+    model,
     model_name,
     lrs,
     edit_package,
-    edit_locs, 
+    edit_locs,
     gold_tokens,
     n_edit_steps=10
     ):
@@ -135,7 +134,7 @@ def performOneEdit(
                            " and before editing.")
     model.train()
     param_groups = [
-        {'params': p, 'lr': 1e-3} 
+        {'params': p, 'lr': 1e-3}
         for p in model.inner_params()
     ]
     inner_opt = (torch.optim.SGD(param_groups))
@@ -150,27 +149,27 @@ def performOneEdit(
             ) = edit_package
 
         idxProbs = getT5IndexedProbs
-    
+
     logit_hist = []
     logit_hist.append(
         idxProbs(model, edit_locs, gold_tokens, edit_tokens,
         None if model_name == 'gpt2' else edit_labels),
     )
-    
+
     with higher.innerloop_ctx(
-        model, 
-        inner_opt, 
+        model,
+        inner_opt,
         override={'lr': lrs} if lrs else None,
-        copy_initial_weights=False, 
+        copy_initial_weights=False,
         track_higher_grads=False # We don't need these because we're only evaluating (no outer loop)
         ) as (fmodel, diffopt):
-        
+
         for edit_step in range(n_edit_steps):
 
             if hasattr(fmodel, "set_editing"):
                 fmodel.set_editing(True)
             output = fmodel(
-                edit_template, 
+                edit_template,
                 attention_mask=edit_temp_mask,
                 labels=edit_labels
             )
@@ -198,7 +197,7 @@ def genModelText(finetuned, lm_tokens):
     edit_loc = max(random.randint(int(len_lm*0.6), int(len_lm*0.9)), 15)
     input_ids = lm_tokens[:, :edit_loc]
     input_size = input_ids.size()[-1]
-    
+
     finetuned.eval()
     print(f"generating, {DEVICE}")
     output_sequence = finetuned.generate(
@@ -223,21 +222,21 @@ def genModelText(finetuned, lm_tokens):
     return edit_tokens, edit_mask, edit_labels, gold_tokens, edit_locs
 
 def evalEditable(
-    model, 
-    dataloader, 
-    model_name, 
+    model,
+    dataloader,
+    model_name,
     n_edit_steps,
     loc="..",
     testset=False
     ):
-    
+
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
     filename = f"edit_success_{timestamp}_{os.path.basename(model_name)}"
-    
+
     model.to(DEVICE)
     n_edits = 0
-    saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}" 
-    
+    saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}"
+
     try:
         lrs = loadLr(model_name)
     except AttributeError:
@@ -247,7 +246,7 @@ def evalEditable(
         f.write("train_step,n_edit_steps,logits,orig_ppl,new_ppl\n")
         for train_step, (lm_data, edit_example, new_ent, old_ent) in enumerate(dataloader):
             print(f"TS {train_step}")
-            
+
             lm_tokens, lm_mask = lm_data
             orig_ent_tokens = old_ent[0].flatten()
             orig_ent_tokens = orig_ent_tokens[orig_ent_tokens != 50256]
@@ -257,10 +256,10 @@ def evalEditable(
             ent_tokens = ent_tokens[ent_tokens != 50256]
 
             edit_locs = utils.locateSubset(edit_tokens, ent_tokens)
-            
+
             lm_tokens, lm_mask = lm_tokens.to(DEVICE), lm_mask.to(DEVICE)
             lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
-            
+
             edit_labels = torch.zeros(edit_tokens.shape, dtype=torch.long) - 100
             edit_labels[:, edit_locs] = edit_tokens[:, edit_locs]
 
@@ -274,15 +273,15 @@ def evalEditable(
             model_out, logit_hist, ll_change, loss = performOneEdit(
                 model,
                 lrs,
-                edit_tokens, 
-                edit_mask, 
+                edit_tokens,
+                edit_mask,
                 edit_labels,
-                edit_locs, 
+                edit_locs,
                 gold_tokens,
-                n_edit_steps=n_edit_steps, 
+                n_edit_steps=n_edit_steps,
                 lr=1e-3
             )
-                    
+
             new_ppl = perplexity(model_out, dataloader)
 
             for (val, acc) in logit_hist:
@@ -291,7 +290,7 @@ def evalEditable(
                 writeStr = ",".join([form(x) for x in run])
                 f.write(f"{writeStr}\n")
 
-            n_edits +=1 
+            n_edits +=1
             if n_edits >= 100:
                 break
 
@@ -304,17 +303,17 @@ def processBatch(batch, lama=False):
             edit_tokens, edit_mask, edit_labels,
             edit_template, edit_temp_mask, edit_labels
         ) = batch
-        
+
         edit_template = edit_template[:1]
         edit_temp_mask = edit_temp_mask[:1]
-      
+
         edit_tokens, edit_mask, _ = strip_padding(edit_tokens, edit_mask, edit_labels)
         edit_template, edit_temp_mask, edit_labels = strip_padding(edit_template, edit_temp_mask, edit_labels)
-        
+
         edit_locs, gold_tokens = 0, edit_labels.flatten().unsqueeze(0).cpu()
-        
+
         edit_package = (
-            edit_tokens.to(DEVICE), edit_mask.to(DEVICE), edit_labels.to(DEVICE), 
+            edit_tokens.to(DEVICE), edit_mask.to(DEVICE), edit_labels.to(DEVICE),
             edit_template.to(DEVICE), edit_temp_mask.to(DEVICE), edit_labels.to(DEVICE)
         )
     else:
@@ -346,9 +345,9 @@ def processBatch(batch, lama=False):
 
 
 def evalSelfSample(
-    model, 
-    dataloader, 
-    model_name, 
+    model,
+    dataloader,
+    model_name,
     n_edit_steps,
     seq_edits=1,
     loc="..",
@@ -359,19 +358,19 @@ def evalSelfSample(
 
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
     filename = f"edit_success_{timestamp}_{os.path.basename(model_name)}"
-    saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}" 
+    saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}"
 
-    try: 
+    try:
         lrs = loadLr(model_name)
     except AttributeError:
         print("No learning rates found!")
         lrs = []
-        
+
     n_edits = 0
     edit_number = 0
     model_number = 0
     sequential = seq_edits > 1
-    
+
     model_edited = copy.deepcopy(model).to(DEVICE)
 
     orig_ppl = perplexity(model, dataloader, lama=lama)
@@ -393,7 +392,7 @@ def evalSelfSample(
                 't5-small' if lama else 'gpt2',
                 lrs,
                 edit_package,
-                edit_locs, 
+                edit_locs,
                 gold_tokens,
                 n_edit_steps=n_edit_steps
             )
@@ -407,7 +406,7 @@ def evalSelfSample(
 
             for idx, (val, acc) in enumerate(logit_hist):
                 run = (
-                    model_number,edit_number,train_step, n_edit_steps, idx, val, 
+                    model_number,edit_number,train_step, n_edit_steps, idx, val,
                     orig_ppl,new_ppl, norm_diff
                     )
                 form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
@@ -421,7 +420,7 @@ def evalSelfSample(
                 model_number += 1
                 model_edited.load_state_dict(model.state_dict())
 
-            n_edits +=1 
+            n_edits +=1
             if n_edits >= (5 * seq_edits):
                 break
         print(f"Saved results to {saveloc}")
@@ -430,7 +429,7 @@ def evalSelfSample(
 
 class ModelComps:
     def __init__(self, model_name, base_name, loc="..", archive=False, test=False):
-        
+
         self.test = test
         self.archive = archive
         self.model_name = model_name
@@ -441,8 +440,8 @@ class ModelComps:
         self.modelStats = self.getModelParams()
         self.stats = {}
         self.globs = []
-    
-    
+
+
     def getModelParams(self):
         model_id = ".".join(self.model_name.split(".")[1:])
         hyper_obj = torch.load(f"{self.loc}/models/hypers.{model_id}")
@@ -455,7 +454,7 @@ class ModelComps:
                 "epochs": hyper_obj.epochs,
                 "n_edit_steps": hyper_obj.n_edit_steps,
                 "cedit": hyper_obj.cedit,
-                "cloc": hyper_obj.cloc 
+                "cloc": hyper_obj.cloc
             }
             return pd.Series(hyper_dict).to_frame().T
 
@@ -471,16 +470,16 @@ class ModelComps:
             df = pd.read_csv(evaluation)
             eval_id = f"{kind}_{evaluation.split('.')[5].split('_')[0]}"
             self.models[eval_id] = df
-    
+
     def runStats(self):
         if not self.models:
             self.readData(self.base_name, kind='base')
             self.readData(self.model_name)
             self.readData(self.ots_name, kind='ots')
-            
-        for name, model in self.models.items():  
-            mean_new_ppl = model.new_ppl.mean() 
-            mean_orig_ppl = model.orig_ppl.mean() 
+
+        for name, model in self.models.items():
+            mean_new_ppl = model.new_ppl.mean()
+            mean_orig_ppl = model.orig_ppl.mean()
             pct_ppl_dd = model.apply(
                 lambda x: 100*(x.new_ppl - x.orig_ppl)/x.orig_ppl, axis=1).mean()
             gross_ppl_dd = model.apply(
@@ -494,7 +493,7 @@ class ModelComps:
             success_by_probs = model.apply(lambda x: x.new_prob > x.old_prob, axis=1).mean()
             n_edit_steps = model.n_edit_steps.max()
 
-            
+
             self.stats[name] = {
                 "edit_steps":n_edit_steps,
                 "mean_new_ppl":mean_new_ppl,
@@ -506,7 +505,7 @@ class ModelComps:
                 "new_logits_higher10":new_logits_higher10,
                 "success_by_probs":success_by_probs,
             }
-    
+
     @property
     def statDf(self):
         stats_df = (
@@ -515,17 +514,17 @@ class ModelComps:
             .rename(columns={'index':'model'})
             .sort_values(["model", "edit_steps"], ascending=False)
         )
-        
+
         return stats_df
-    
+
     def summary(self, long=False):
         if not self.stats:
             self.runStats()
         print("Model Parameters:")
         display(self.modelStats)
-        
+
         print("Success Metrics")
-        
+
         stats_df = (
             pd.DataFrame(self.stats).T
             .reset_index()
@@ -536,7 +535,7 @@ class ModelComps:
             display(stats_df.melt())
         else:
             display(stats_df)
-                
+
     def plotter(self, xlim=[]):
         print("Plotting Logits")
         for name, model in self.models.items():
@@ -546,7 +545,7 @@ class ModelComps:
             plt.hist(model.new_logits, alpha=0.4, label="Post-Edit")
             if name[:3] == 'ots':
                 plt.legend(fontsize='large')
-            
+
             if xlim:
                 plt.xlim(xlim)
             plt.xlabel("Edited Entity Logits", fontsize='large')
@@ -559,7 +558,8 @@ if __name__ == "__main__":
     parser.add_argument('--model_path', help='')
     parser.add_argument('--test_set', action='store_true')
     parser.add_argument('--gen', action='store_true')
-    parser.add_argument('--lama', action='store_true')    
+    parser.add_argument('--lama', action='store_true')
+    parser.add_argument('--kilt', action='store_true')
     parser.add_argument('--split_params', action='store_true')
     parser.add_argument('--edit_steps', default=5, type=int)
     parser.add_argument('--seq_edits', default=1, type=int)
@@ -568,14 +568,14 @@ if __name__ == "__main__":
 
     loc = utils.sailPreprocess()
 
-    if args.model_path: 
-        name = 't5-small' if args.lama else 'gpt2'
+    if args.model_path:
+        name = 'gpt2' if args.gen else 't5-small'
         print(f"Using model {name}")
         model, tokenizer = utils.loadTrainedModel(args.model_path, name=name, cache_dir=loc,
                                                   split_params=args.split_params)
 
     ds = 'test' if args.test_set else 'validation'
-    
+
     if args.gen:
         dataloader = utils.retrieveEditDataloader(
             tokenizer,
@@ -587,7 +587,7 @@ if __name__ == "__main__":
         evalSelfSample(
             model,
             dataloader,
-            args.model_path, 
+            args.model_path,
             int(args.edit_steps),
             seq_edits=args.seq_edits,
             loc=loc,
@@ -611,7 +611,7 @@ if __name__ == "__main__":
         evalSelfSample(
             model,
             validation,
-            args.model_path, 
+            args.model_path,
             int(args.edit_steps),
             seq_edits=args.seq_edits,
             loc=loc,
@@ -619,7 +619,28 @@ if __name__ == "__main__":
             copy_to=args.copy_to,
             lama=True
             )
-        
+    elif args.kilt:
+        dataloader = MaskedLMDataloader(
+            'kilt',
+            tokenizer,
+            loc=loc,
+            bs=1,
+            mode='editable',
+            n_edits=1
+        )
+        validation = dataloader.validation
+        evalSelfSample(
+            model,
+            validation,
+            args.model_path,
+            int(args.edit_steps),
+            seq_edits=args.seq_edits,
+            loc=loc,
+            testset=args.test_set,
+            copy_to=args.copy_to,
+            lama=True
+            )
+
     else:
          evalEditable(
             model,

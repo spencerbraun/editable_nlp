@@ -210,6 +210,7 @@ class KILTDataset(torch.utils.data.IterableDataset):
         self.batch_size = batch_size
         self.tokenizer = tokenizer
         self.seed = seed
+        self.skip = 0
 
         self.raw_dataset = load_dataset(
             "kilt_tasks",
@@ -313,58 +314,63 @@ class KILTDataset(torch.utils.data.IterableDataset):
 
         random.seed(self.seed)
         np.random.seed(self.seed)
+        while True:
+            rng = np.random.default_rng(index + self.skip)
+            edit_idxs = rng.choice(self.list_IDs, self.n_edits, replace=False)
+            loc_idxs = rng.choice(self.list_IDs, self.n_edits, replace=False)
+            base_idxs = rng.choice(self.list_IDs, self.batch_size, replace=False)
 
-        rng = np.random.default_rng(index)
-        edit_idxs = rng.choice(self.list_IDs, self.n_edits, replace=False)
-        loc_idxs = rng.choice(self.list_IDs, self.n_edits, replace=False)
-        base_idxs = rng.choice(self.list_IDs, self.batch_size, replace=False)
+            original_sent, edited_sent = [], []
+            original_label, edited_label= [], []
+            for idx in edit_idxs:
+                template1 = self.dataset['template1'][idx]
+                label = self.dataset['label'][idx]
 
-        original_sent, edited_sent = [], []
-        original_label, edited_label= [], []
-        for idx in edit_idxs:
-            template1 = self.dataset['template1'][idx]
-            label = self.dataset['label'][idx]
+                template2 = self.dataset['template2'][idx]
+                edit_label = self.dataset['edit_label'][idx]
 
-            template2 = self.dataset['template2'][idx]
-            edit_label = self.dataset['edit_label'][idx]
+                original_sent.append(self.tokenize(template1, 200))
+                original_label.append(self.tokenize(label, 50))
+                edited_sent.append(self.tokenize(template2, 200))
+                edited_label.append(self.tokenize(edit_label, 50))
 
-            original_sent.append(self.tokenize(template1, 200))
-            original_label.append(self.tokenize(label, 20))
-            edited_sent.append(self.tokenize(template2, 200))
-            edited_label.append(self.tokenize(edit_label, 20))
+            original_tokens, original_mask = tuple(zip(*original_sent))
+            edited_tokens, edited_mask = tuple(zip(*edited_sent))
 
-        original_tokens, original_mask = tuple(zip(*original_sent))
-        edited_tokens, edited_mask = tuple(zip(*edited_sent))
+            original_labels, original_lab_mask = tuple(zip(*original_label))
+            edited_labels, edited_lab_mask = tuple(zip(*edited_label))
 
-        original_labels, original_lab_mask = tuple(zip(*original_label))
-        edited_labels, edited_lab_mask = tuple(zip(*edited_label))
+            loc_tokens, loc_mask = tuple(zip(*[
+                self.tokenize(self.dataset['template1'][idx], 200)
+                for idx in loc_idxs
+                ]))
+            loc_labels, loc_lab_mask = tuple(zip(*[
+                self.tokenize(self.dataset['label'][idx], 50)
+                for idx in loc_idxs
+                ]))
 
-        loc_tokens, loc_mask = tuple(zip(*[
-            self.tokenize(self.dataset['template1'][idx], 200)
-            for idx in loc_idxs
-            ]))
-        loc_labels, loc_lab_mask = tuple(zip(*[
-            self.tokenize(self.dataset['label'][idx], 20)
-            for idx in loc_idxs
-            ]))
+            base_tokens, base_mask = tuple(zip(*[
+                self.tokenize(self.dataset['template1'][idx], 200)
+                for idx in base_idxs
+                ]))
+            base_labels, base_lab_mask = tuple(zip(*[
+                self.tokenize(self.dataset['label'][idx], 50)
+                for idx in base_idxs
+                ]))
 
-        base_tokens, base_mask = tuple(zip(*[
-            self.tokenize(self.dataset['template1'][idx], 200)
-            for idx in base_idxs
-            ]))
-        base_labels, base_lab_mask = tuple(zip(*[
-            self.tokenize(self.dataset['label'][idx], 20)
-            for idx in base_idxs
-            ]))
+            to_return = [
+                base_tokens, base_mask, base_labels,
+                loc_tokens, loc_mask, loc_labels,
+                original_tokens, original_mask, edited_labels, #sentence and template labels should be the same
+                edited_tokens, edited_mask, edited_labels
+                ]
+            try:
+                to_return = [torch.cat(tensors) for tensors in to_return]
+            except RuntimeError:
+                self.skip += 1
+                continue
 
-        to_return = [
-            base_tokens, base_mask, base_labels,
-            loc_tokens, loc_mask, loc_labels,
-            original_tokens, original_mask, edited_labels, #sentence and template labels should be the same
-            edited_tokens, edited_mask, edited_labels
-            ]
-
-        to_return = [torch.cat(tensors) for tensors in to_return]
+            break
 
         if self.mode == 'finetune':
             return [torch.cat(tensors) for tensors in [base_tokens, base_mask, base_labels]]

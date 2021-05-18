@@ -82,13 +82,13 @@ class T5KILTConfig:
         self.task = 't5_kilt'
         self.model_name = 't5-small'
 
-        self.inner_lr = 1e-2
+        self.inner_lr = 1e-3
         self.outer_lr = 1e-5
-        self.epochs = 1
+        self.epochs = 2
         self.max_iter = 40000
         self.n_edit_steps = 1
-        self.cedit = 1
-        self.cloc = 1
+        self.cedit = 0.5
+        self.cloc = 5
         self.learnable_lr = True
         self.lr_lr = 1e-3
 
