@@ -53,14 +53,14 @@ class BaseTrainer:
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         if not self.config.debug:
             wandb.init(
-                project='patchable' if self.model_name == 'gpt2' else 'patchable_masked',
+                project='patchable' if self.config.task == 'gen' else 'patchable_masked',
                 entity='patchable-lm',
                 config=self.config,
                 name=f"{self.config.task}{split}_{self.timestamp}",
                 dir=self.config.write_loc,
             )
             wandb.watch(self.model)
-            transformers.logging.set_verbosity_error()
+            transformers.logging.set_verbosity_info()
 
         self.epoch = 0
 
@@ -347,7 +347,7 @@ class SelfSampleTrainer(EditTrainer):
 
         self.validation_set = validation
         if self.config.split_params:
-            utils.split_conv_layers(self.model, self.model_name) 
+            utils.wrap_model(self.model, self.model_name) 
         
 
     def genModelText(self, lm_tokens):
@@ -384,7 +384,7 @@ class SelfSampleTrainer(EditTrainer):
         with torch.no_grad():
             for batch_idx, batch in enumerate(dataset):
                 lm_tokens, lm_mask, lm_labels = self.mask_padding(
-                    batch[0], batch[1], batch[2] if self.model_name == 't5-small' else None
+                    batch[0], batch[1], batch[2] if self.config.task == 'cloze' else None
                     )
                 loss = model(lm_tokens, labels=lm_labels).loss
                 acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels))
@@ -393,9 +393,9 @@ class SelfSampleTrainer(EditTrainer):
         return torch.tensor(ppl)
 
     def mask_padding(self, tokens, mask, label=None):
-        if self.model_name == 'gpt2':
+        if self.config.task == 'gen':
             return tokens.to(self.device), mask.to(self.device), tokens.masked_fill(mask == 0, -100).to(self.device)
-        elif self.model_name == 't5-small':
+        elif self.config.task == 'cloze':
             return (tokens.to(self.device), mask.to(self.device), 
             label.masked_fill(label == self.tokenizer.pad_token_id, -100).to(self.device))
 
@@ -434,10 +434,10 @@ class SelfSampleTrainer(EditTrainer):
             indices = np.random.default_rng(self.val_iter).choice(len(data), 10, replace=False)
             subset = Subset(data, indices)
             for batch_idx, datapack in enumerate(subset):
-                if self.model_name == 'gpt2':
+                if self.config.task == 'gen':
                     (_, _, _, _, _, _, edit_tokens, edit_mask, edit_labels) = datapack
                     
-                elif self.model_name == 't5-small':
+                elif self.config.task == 'cloze':
                     (
                         _, _, _,
                         _, _, _,
@@ -454,10 +454,10 @@ class SelfSampleTrainer(EditTrainer):
 
                 edit_tokens, edit_mask, edit_labels = self.strip_padding(edit_tokens, edit_mask, edit_labels)
                 
-                if self.model_name == 'gpt2':
+                if self.config.task == 'gen':
                     edit_locs, gold_tokens = self.get_edit_locs(edit_tokens, edit_labels)
                     edit_package = (edit_tokens, edit_mask, edit_labels)
-                elif self.model_name == 't5-small':
+                elif self.config.task == 'cloze':
                     edit_locs, gold_tokens = 0, edit_labels.flatten().unsqueeze(0)
                     edit_package = (edit_tokens, edit_mask, edit_labels, edit_template, edit_temp_mask, edit_labels)
 
@@ -469,7 +469,7 @@ class SelfSampleTrainer(EditTrainer):
 
                 model_out, logit_hist, ll_change, loss = performOneEdit(
                     self.model,
-                    self.model_name,
+                    self.config.task,
                     self.lrs,
                     edit_package,
                     edit_locs, 
@@ -523,11 +523,11 @@ class SelfSampleTrainer(EditTrainer):
             self.epoch = epoch
             
             for train_step, datapack in enumerate(self.data):
-                if self.model_name == 'gpt2':
+                if self.config.task == 'gen':
                     (lm_tokens, lm_mask, loc_tokens, loc_mask, _, _, edit_tokens, edit_mask, edit_labels) = datapack
                     lm_tokens, lm_mask, lm_labels = self.mask_padding(lm_tokens, lm_mask)
                     loc_tokens, loc_mask, loc_labels = self.mask_padding(loc_tokens, loc_mask)
-                elif self.model_name == 't5-small':
+                elif self.config.task == 'cloze':
                     (
                         lm_tokens, lm_mask, lm_labels,
                         loc_tokens, loc_mask, loc_labels, 
@@ -581,7 +581,7 @@ class SelfSampleTrainer(EditTrainer):
                                 fmodel.set_editing(False)
                             diffopt.step(loss)
 
-                        if self.model_name == 't5-small':
+                        if self.config.task == 'cloze':
                             edit_tokens_, edit_mask_, edit_labels_ = (
                             self.strip_padding(edit_tokens[edit_example_idx],
                                                edit_mask[edit_example_idx],
@@ -713,18 +713,20 @@ if __name__ == "__main__":
     parser.add_argument('--inner_lr', type=float, default=None)
     parser.add_argument('--cedit', type=float, default=None)
     parser.add_argument('--cloc', type=float, default=None)
+    parser.add_argument('--model', type=str, default='bart-base')
     args = parser.parse_args()
     
     loc = utils.sailPreprocess()
     tokenizer = utils.loadTokenizer(
-        name= 'gpt2' if not args.lama else 't5-small',
+        name= 'gpt2' if not args.lama else args.model,
         cache_dir=loc)
     
     config = (
         TrainConfig() if args.finetune else
         EditConfig() if args.editable else
         SelfSampleGPT2Config() if args.gen else
-        T5Config() 
+        ClozeBartConfig() if args.model == 'bart-base' else
+        ClozeT5Config() 
     )
     config.write_loc = loc
     config.bs = args.bs

@@ -32,7 +32,7 @@ class EditConfig:
 
 class SelfSampleGPT2Config:
     def __init__(self):
-        self.task = 'gpt2_gen'
+        self.task = 'gen'
         self.model_name = 'gpt2'
         self.inner_lr = 1e-2
         self.outer_lr = 1e-5
@@ -52,9 +52,9 @@ class SelfSampleGPT2Config:
         self.silent = False
         
         
-class T5Config:
+class ClozeT5Config:
     def __init__(self):
-        self.task = 't5_lama'
+        self.task = 'cloze'
         self.model_name = 't5-small' #t5-small or gpt2
         self.inner_loop = 'template' #sentence, template, or random
         self.max_val_len = 2000
@@ -73,5 +73,29 @@ class T5Config:
         self.model_save_pt = 5000
         self.write_loc = '..'
         self.ft_model_name = "T5_finetune_epoch0_ts20000.20210505.09.05.1620232583"
+
+        self.silent = False
+
+class ClozeBartConfig:
+    def __init__(self):
+        self.task = 'cloze'
+        self.model_name = 'bart-base' #t5-small or gpt2
+        self.inner_loop = 'template' #sentence, template, or random
+        self.max_val_len = 2000
+        
+        self.inner_lr = 1e-2
+        self.outer_lr = 1e-4
+        self.epochs = 1
+        self.max_iter = 40000
+        self.n_edit_steps = 1
+        self.cedit = 5
+        self.cloc = 10
+        self.learnable_lr = True
+        self.lr_lr = 1e-3
+
+        self.debug = False
+        self.model_save_pt = 1000
+        self.write_loc = '..'
+        self.ft_model_name = None
 
         self.silent = False

@@ -36,7 +36,8 @@ class LAMADataset(torch.utils.data.IterableDataset):
         self.n_edits = n_edits
         self.batch_size = batch_size
         self.tokenizer = tokenizer
-        
+        self.bart = isinstance(self.tokenizer, transformers.BartTokenizer)
+        print(f'Dataset is BART: {self.bart}')
         self.skip = 0
         
         self.edit_location = f"{data_loc}/lama_edited_{self.pct}pct.pkl"
@@ -58,7 +59,7 @@ class LAMADataset(torch.utils.data.IterableDataset):
             text,       
             truncation=False,
             max_length=max_len,
-            # padding="max_length",
+            padding=False if bart else "max_length",
             return_tensors='pt'
         )
         return tok["input_ids"], tok["attention_mask"]
@@ -104,13 +105,17 @@ class LAMADataset(torch.utils.data.IterableDataset):
     def processMasks(self, idx, kind):
         if kind == 'sentence':
             sentence = self.dataset['masked_sentence'][idx]
-            # to_return = sentence.replace("[MASK]", "<extra_id_0>")
-            to_return = sentence.replace("[MASK]", "<mask>")
+            if self.bart:
+                to_return = sentence.replace("[MASK]", "<mask>")
+            else:
+                to_return = sentence.replace("[MASK]", "<extra_id_0>")
             max_len = 200
         elif kind == 'label':
             obj_surface = self.dataset['obj_surface'][idx]
-            # to_return = f"<extra_id_0> {obj_surface.strip()} <extra_id_1>"
-            to_return = f"{obj_surface.strip()}"
+            if self.bart:
+                to_return = f"{obj_surface.strip()}"
+            else:
+                to_return = f"<extra_id_0> {obj_surface.strip()} <extra_id_1>"
             max_len = 10
 
         return self.tokenize(to_return, max_len)
@@ -138,12 +143,16 @@ class LAMADataset(torch.utils.data.IterableDataset):
                 sub_surface = self.dataset['sub_surface'][idx]
                 template = self.dataset['template'][idx]
                 template = template.replace("[X]", sub_surface)
-                # masked_template = template.replace("[Y]", "<extra_id_0>")
-                masked_template = template.replace("[Y]", "<mask>")
+                if self.bart:
+                    masked_template = template.replace("[Y]", "<mask>")
+                else:
+                    masked_template = template.replace("[Y]", "<extra_id_0>")
                 
                 edit_surface = self.dataset['edit_surface'][idx]
-                # edit_label = f"<extra_id_0> {edit_surface.strip()} <extra_id_1>"
-                edit_label = edit_surface
+                if self.bart:
+                    edit_label = edit_surface
+                else:
+                    edit_label = f"<extra_id_0> {edit_surface.strip()} <extra_id_1>"
 
                 original_sent.append(masked_sent)
                 original_label.append(orig_label)

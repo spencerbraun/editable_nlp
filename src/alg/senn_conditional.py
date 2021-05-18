@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from typing import Callable, List, Union
+import inspect
 
 
 def filter_inner_params(params: List[nn.Parameter]):
@@ -29,7 +30,7 @@ class ConditionalLinearWrapper(nn.Module):
 
         # Recursively replace each nn.Linear in the model with a ConditionerLinear
         n_wrapped = _recursive_apply(model)
-        print(f"Wrapped {n_wrapped} modules for predicate {predicate}")
+        print(f"Wrapped {n_wrapped} modules using predicate:\n{inspect.getsource(predicate)}")
 
         # A convenience function to enable/disable editing
         def _set_editing(self, active: bool):
