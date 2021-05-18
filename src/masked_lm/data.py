@@ -58,7 +58,7 @@ class LAMADataset(torch.utils.data.IterableDataset):
             text,       
             truncation=False,
             max_length=max_len,
-            padding="max_length",
+            # padding="max_length",
             return_tensors='pt'
         )
         return tok["input_ids"], tok["attention_mask"]
@@ -104,11 +104,13 @@ class LAMADataset(torch.utils.data.IterableDataset):
     def processMasks(self, idx, kind):
         if kind == 'sentence':
             sentence = self.dataset['masked_sentence'][idx]
-            to_return = sentence.replace("[MASK]", "<extra_id_0>")
+            # to_return = sentence.replace("[MASK]", "<extra_id_0>")
+            to_return = sentence.replace("[MASK]", "<mask>")
             max_len = 200
         elif kind == 'label':
             obj_surface = self.dataset['obj_surface'][idx]
-            to_return = f"<extra_id_0> {obj_surface.strip()} <extra_id_1>"
+            # to_return = f"<extra_id_0> {obj_surface.strip()} <extra_id_1>"
+            to_return = f"{obj_surface.strip()}"
             max_len = 10
 
         return self.tokenize(to_return, max_len)
@@ -136,10 +138,12 @@ class LAMADataset(torch.utils.data.IterableDataset):
                 sub_surface = self.dataset['sub_surface'][idx]
                 template = self.dataset['template'][idx]
                 template = template.replace("[X]", sub_surface)
-                masked_template = template.replace("[Y]", "<extra_id_0>")
-
+                # masked_template = template.replace("[Y]", "<extra_id_0>")
+                masked_template = template.replace("[Y]", "<mask>")
+                
                 edit_surface = self.dataset['edit_surface'][idx]
-                edit_label = f"<extra_id_0> {edit_surface.strip()} <extra_id_1>"
+                # edit_label = f"<extra_id_0> {edit_surface.strip()} <extra_id_1>"
+                edit_label = edit_surface
 
                 original_sent.append(masked_sent)
                 original_label.append(orig_label)

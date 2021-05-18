@@ -7,8 +7,9 @@ import math
 import glob
 import numpy as np
 import torch
+import torch.nn as nn
 import transformers
-from transformers import GPT2Tokenizer, GPT2LMHeadModel, T5Tokenizer, T5ForConditionalGeneration
+from transformers import GPT2Tokenizer, GPT2LMHeadModel, T5Tokenizer, T5ForConditionalGeneration, BartTokenizer, BartForConditionalGeneration
 from data_process import TorchDataset, WikitextDataset, NTokenDataset
 
 from alg.senn_conditional import ConditionalLinearWrapper
@@ -51,13 +52,21 @@ def loadOTSModel(name='gpt2', cache_dir=None):
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "left"
     elif name == 't5-small':
+        model = BartForConditionalGeneration.from_pretrained(
+            "facebook/bart-base", cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        )
+        tokenizer = BartTokenizer.from_pretrained(
+            "facebook/bart-base", cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        )
+        """
         model = T5ForConditionalGeneration.from_pretrained(
         "t5-small", cache_dir=f"{cache_dir}/hf" if cache_dir else None
         )
         tokenizer = T5Tokenizer.from_pretrained(
             't5-small', cache_dir=f"{cache_dir}/hf" if cache_dir else None
             )
-
+        """
+        
     return model, tokenizer
 
 def loadTokenizer(name='gpt2', cache_dir=None):
@@ -70,9 +79,13 @@ def loadTokenizer(name='gpt2', cache_dir=None):
         tokenizer.padding_side = "left"
         
     elif name == 't5-small':
-        tokenizer = T5Tokenizer.from_pretrained(
-            't5-small', cache_dir=f"{cache_dir}/hf" if cache_dir else None
-            )
+        tokenizer = BartTokenizer.from_pretrained(
+            "facebook/bart-base", cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        )
+
+        # tokenizer = T5Tokenizer.from_pretrained(
+        #     't5-small', cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        #     )
 
     return tokenizer
 
@@ -200,10 +213,16 @@ def split_conv_layers(model, name):
         )
         ConditionalLinearWrapper.wrap_model(model, model.config.n_embd, -1, conv_predicate)
     elif name == 't5-small':
-        conv_predicate = lambda mod: (
-            isinstance(mod, transformers.models.t5.modeling_t5.T5DenseReluDense)
+        # conv_predicate = lambda mod: (
+        #     isinstance(mod, transformers.models.t5.modeling_t5.T5DenseReluDense)
+        # )
+        # ConditionalLinearWrapper.wrap_model(model, model.config.d_model, -1, conv_predicate)
+        lin_predicate = lambda mod: (
+            isinstance(mod, transformers.models.bart.modeling_bart.BartDecoderLayer) or
+            isinstance(mod, transformers.models.bart.modeling_bart.BartEncoderLayer)
         )
-        ConditionalLinearWrapper.wrap_model(model, model.config.d_model, -1, conv_predicate)
+        n_hidden = model.config.d_model
+        ConditionalLinearWrapper.wrap_model(model, n_hidden, -1, lin_predicate)
 
 def prep_for_maml(model, adapt_all: bool = False):
     # Default inner loop adaptation parameters
@@ -214,9 +233,9 @@ def prep_for_maml(model, adapt_all: bool = False):
             else:
                 return list(self.transformer.h[-3:].parameters())
         else:
-            return (list(self.encoder.block[-2:].parameters()) + 
-                    list(self.decoder.block[-2:].parameters()))
-       
+            return (list(self.model.encoder.layers[-2:].parameters()) + 
+                    list(self.model.decoder.layers[-2:].parameters()))
+
     type(model).inner_params = _inner_params
 
 
@@ -233,7 +252,7 @@ def loadTrainedModel(
     if split_params:
         split_conv_layers(model, name)
         
-    model.load_state_dict(torch.load(modelPath))
+    # model.load_state_dict(torch.load(modelPath))
     model.eval()
     if not tokenizer:
         return model

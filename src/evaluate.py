@@ -183,14 +183,14 @@ def performOneEdit(
                 None if model_name == 'gpt2' else edit_labels),
             )
 
-            ll_change = (abs(logit_hist[0][0]) - abs(logit_hist[-1][0]))/abs(logit_hist[0][0])
-            print(f"logit history: {logit_hist}")
-            print(f"Edit step {edit_step}; ll change {ll_change} , logit {logit_hist[-1][0]}, loss {output.loss}")
+        prob_change = logit_hist[-1][0].exp() - logit_hist[0][0].exp()
+        print(f"prob history: {[l[0].exp() for l in logit_hist]}")
+        print(f"Edit step {edit_step}; prob change {prob_change}; logit {logit_hist[-1][0]}; loss {output.loss}")
 
     edited_model = copy.deepcopy(model)
     edited_model.load_state_dict(fmodel.state_dict())
 
-    return edited_model, logit_hist, ll_change, output.loss
+    return edited_model, logit_hist, prob_change, output.loss
 
 def genModelText(finetuned, lm_tokens):
 
