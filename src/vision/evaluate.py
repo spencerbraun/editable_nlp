@@ -324,9 +324,15 @@ def main(config: DictConfig):
     if config.split_params:
         basic_block_predicate = lambda m: isinstance(m, torchvision.models.resnet.BasicBlock)
         n_hidden = lambda m: m.conv2.weight.shape[0]
-        ConditionalLinearWrapper.wrap_model(model, n_hidden, -3, basic_block_predicate)
+        ConditionalLinearWrapper.wrap_model(
+            model,
+            n_hidden,
+            dim=-3,   # (in_channels, out_channels, H, W)
+            predicate=basic_block_predicate,
+            ortho=config.ortho
+        )
 
-    if not config.pretrained and not OmegaConf.is_missing(config, 'model_path'):
+    if not config.pretrained and config.model_path:
         model_path = config.checkpoint_path
         model.load_state_dict(torch.load(model_path))
         print(f"Loaded model weights from {model_path}")
@@ -345,7 +351,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     checkpoint_path = os.path.abspath(args.checkpoint_path)
-    checkpoint = os.path.basename(checkpoint_path)  # /path/to/run_dir/checkpoints/checkpoint.pth
+    checkpoint = os.path.basename(checkpoint_path)  # /path/to/run_dir/models/checkpoint.pth
     checkpoints_dir = os.path.dirname(checkpoint_path)
     run_dir = os.path.dirname(checkpoints_dir)
 

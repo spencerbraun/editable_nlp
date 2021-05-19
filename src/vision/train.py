@@ -49,7 +49,8 @@ class BaseTrainer:
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         # outfiles
-        self.timestamp = datetime.now().strftime("%Y-%m-%d.%H-%m-%S")
+        date, time = run_dir.split('/')[-2:]
+        self.timestamp = f"{date}.{time}"
         self.hyperspath = f"{self.model_dir}/hypers.{self.timestamp}"
         self.errpath = f"{run_dir}/errors/errors_{self.timestamp}"
         self.statepath = (
@@ -254,17 +255,6 @@ class EditTrainer(BaseTrainer):
                 ortho=config.ortho
             )
 
-
-    def configure_data(self, train_set, val_set):
-        n_train_edit_examples = len(train_set) // 10 # NOTE
-        n_val_edit_examples = len(val_set) // 10     # NOTE
-        self.train_set, train_edit_data = random_split(train_set, [len(train_set) - n_train_edit_examples, n_train_edit_examples])
-        self.val_set, val_edit_data = random_split(val_set, [len(val_set) - n_val_edit_examples, n_val_edit_examples])
-
-        self.train_edit_gen = editGenerator(train_edit_data, self.config.edit_bs)
-        self.val_edit_gen = editGenerator(val_edit_data, self.config.edit_bs)
-
-
     def train_step(self, inputs, labels):
         self.verbose_echo("Train step")
 
@@ -324,7 +314,7 @@ class EditTrainer(BaseTrainer):
                 self.config.cedit * l_edit
             ) / self.config.n_edits
 
-            if not self.config.split_params:
+            if not self.config.split_params or edit_example_idx == 0:
                 total_edit_loss.backward()
             else:
                 # Only train phi/lrs using edit loss, not theta
@@ -407,8 +397,12 @@ class EditTrainer(BaseTrainer):
         top1_post, top5_post = [], []
         losses, prob_changes, edit_successes = [], [], []
 
+        n_val_edit_examples = len(self.val_set) // 10
+        val_set, val_edit_data = random_split(self.val_set, [len(self.val_set) - n_val_edit_examples, n_val_edit_examples])
+        self.val_edit_gen = editGenerator(val_edit_data, self.config.edit_bs)
+
         val_loader = DataLoader(
-            self.val_set,
+            val_set,
             batch_size=2*self.config.bs,
             shuffle=True,
             # num_workers=2,
@@ -528,18 +522,18 @@ class EditTrainer(BaseTrainer):
             torch.nn.Parameter(torch.tensor(self.config.inner_lr)) 
             for p in self.model.inner_params()
         ]
-        self.lr_opt = torch.optim.SGD(self.lrs, lr=self.config.lr_lr)
+        self.lr_opt = torch.optim.Adam(self.lrs, lr=self.config.lr_lr)
+        self.lr_scheduler = None
+        '''
+        self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.lr_opt,
+            T_max=self.config.epochs
+        )
+        '''
 
         self.model.train()
         self.model.to(self.device)
         self.global_iter = 0
-        train_loader = DataLoader(
-            self.train_set,
-            batch_size=2*self.config.bs,
-            shuffle=True,
-            # num_workers=2,
-            pin_memory=True
-        )
 
         self.verbose_echo("Starting editable training")
 
@@ -550,6 +544,18 @@ class EditTrainer(BaseTrainer):
             top5 = utils.AverageMeter('Acc@5', ':6.2f')
 
             self.verbose_echo(f"Epoch {epoch}")
+
+            n_train_edit_examples = len(self.train_set) // 10
+            train_set, train_edit_data = random_split(self.train_set, [len(self.train_set) - n_train_edit_examples, n_train_edit_examples])
+            self.train_edit_gen = editGenerator(train_edit_data, self.config.edit_bs)
+
+            train_loader = DataLoader(
+                self.train_set,
+                batch_size=2*self.config.bs,
+                shuffle=True,
+                # num_workers=2,
+                pin_memory=True
+            )
 
             for inputs, labels in train_loader:
                 self.verbose_echo("Loaded training batch")
@@ -578,10 +584,14 @@ class EditTrainer(BaseTrainer):
                     'acc/top1_train_avg': top1.avg,
                     'acc/top5_train_avg': top5.avg,
                     'lr': self.opt.param_groups[0]['lr'],
+                    'lr_lr': self.lr_opt.param_groups[0]['lr']
                 })
 
             if self.scheduler:
                 self.scheduler.step()
+
+            if self.lr_scheduler:
+                self.lr_scheduler.step()
 
         self.saveState(self.model, self.global_iter, final=True)
         if self.config.learnable_lr:

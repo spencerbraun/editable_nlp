@@ -1,6 +1,7 @@
 
 import os
 import torch
+import torch.nn as nn
 import torchvision.models as models
 import numpy as np
 
@@ -40,6 +41,12 @@ def prep_resnet_for_maml(model, adapt_all: bool = False):
             return list(self.parameters())
         else:
             return list(self.layer3.parameters())
+
+    '''
+    for m in model.modules():
+        if type(m) == nn.BatchNorm2d:
+            m.track_running_stats = False
+    '''
 
     type(model).inner_params = _inner_params
 

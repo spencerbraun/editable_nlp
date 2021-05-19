@@ -7,14 +7,14 @@ model_path: models/cifar/resnet18/finetune/finetune_epoch199_ts9999.20210429.19.
 dataset: cifar10
 bs: 128
 
-epochs: 10
+epochs: 5
 loss: cross_entropy
 outer_lr: 1.0e-4
 inner_lr: 1.0e-1
 n_edit_steps: 5
 edit_bs: 16
-cedit: 0.1
-cloc: 1
+cedit: 1
+cloc: 10
 learnable_lr: True
 lr_lr: 1.0e-3
 lr_grad_clip: 50
