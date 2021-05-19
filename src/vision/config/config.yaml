@@ -7,5 +7,6 @@ n_edits: 1
 cbase: 1
 lr_grad_clip: null
 weight_decay: null
+ortho: False
 defaults:
   - experiment: base_cifar_resnet

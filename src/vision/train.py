@@ -250,7 +250,8 @@ class EditTrainer(BaseTrainer):
                 self.model,
                 n_hidden,
                 dim=-3,  # (in_channels, out_channels, H, W)
-                predicate=basic_block_predicate
+                predicate=basic_block_predicate,
+                ortho=config.ortho
             )
 
 

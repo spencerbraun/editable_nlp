@@ -20,4 +20,4 @@ learnable_lr: True
 lr_lr: 1.0e-3
 lr_grad_clip: 50
 split_params: True
-
+ortho: True
