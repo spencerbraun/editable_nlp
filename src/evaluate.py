@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import higher
+import transformers
 from torch.utils.data import Subset
 
 import utils
@@ -25,38 +26,39 @@ import matplotlib.pyplot as plt
 from IPython.display import display
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+TOKENIZER = utils.loadTokenizer(name='bart-base', cache_dir='/juice/scr/spencerb/results/')
 
 def get_params(model):
     return torch.cat([p.view(-1) for p in model.parameters()])
 
-def processLAMABatch(tokens, mask, label):
+def processClozeBatch(tokens, mask, label, pad_token_id=0):
     return (tokens.to(DEVICE), mask.to(DEVICE),
-            label.masked_fill(label == 0, -100).to(DEVICE))
+            label.masked_fill(label == pad_token_id, -100).to(DEVICE))
 
-def strip_padding(tokens, mask, labels):
-    mask_ = tokens != 0
+def strip_padding(tokens, mask, labels, pad_token_id=0):
+    mask_ = tokens != pad_token_id
     tokens = tokens[mask_].unsqueeze(0)
     mask = mask[mask_].unsqueeze(0)
 
-    label_mask = labels != 0
+    label_mask = labels != pad_token_id
     labels = labels[label_mask].unsqueeze(0)
 
     return tokens, mask, labels
 
 
-def perplexity(model, dataloader, lama=False, iteration=0):
+def perplexity(model, dataloader, cloze=False, iteration=0, pad_token_id=0):
     model.to(DEVICE)
     model.eval()
     acc = utils.NLLAccumulator()
 
     indices = np.random.default_rng(iteration).choice(len(dataloader), 200, replace=False)
     subset = Subset(dataloader, indices)
-    dataset = dataloader if not lama else subset
+    dataset = dataloader if not cloze else subset
     with torch.no_grad():
         for batch_idx, batch in enumerate(dataset):
-            if lama:
-                lm_tokens, lm_mask, lm_labels = processLAMABatch(
-                    batch[0], batch[1], batch[2]
+            if cloze:
+                lm_tokens, lm_mask, lm_labels = processClozeBatch(
+                    batch[0], batch[1], batch[2], pad_token_id=pad_token_id
                     )
                 loss = model(lm_tokens, labels=lm_labels).loss
                 acc.update(loss.item(), acc.n_predictions_for_labels(lm_labels, offset=0))
@@ -85,7 +87,7 @@ def getIndexedProbs(model, index, gold_tokens, sent_tokens, labels):
 
     return (logit_sum, accuracy)
 
-def getT5IndexedProbs(model, index, gold_tokens, sent_tokens, labels):
+def getClozeIndexedProbs(model, index, gold_tokens, sent_tokens, labels):
 
     model.eval()
     with torch.no_grad():
@@ -96,25 +98,33 @@ def getT5IndexedProbs(model, index, gold_tokens, sent_tokens, labels):
         gold_tokens = gold_tokens.flatten().unsqueeze_(1).cpu()
         logit_sum = torch.sum(logits.gather(1, gold_tokens))
         accuracy = (output_lps.argmax(-1) == labels).all(-1).float().mean().cpu()
+        print('*'*50)
+        print(f"GOLD: {TOKENIZER.batch_decode(labels)}")
+        print(f"GUESS: {TOKENIZER.batch_decode(output_lps.argmax(-1))}")
+        print('*'*50)
 
     model.train()
     return (logit_sum, accuracy)
 
-def loadLr(model_path):
-    model_name = os.path.basename(model_path)
-    model_id = model_name.split(".")[-1]
-    step = re.search('ts.*\.', model_name).group(0)[:-1]
-    split = '_split' if 'split' in model_name else ''
-    dir_loc = os.path.dirname(model_path)
-    lr_glob = glob.glob(f"{dir_loc}/lr{split}_epoch0_{step}.{model_id}")
+def loadLr(model_path, lr_path=None):
+    
+    if not lr_path:
+        model_name = os.path.basename(model_path)
+        model_id = model_name.split(".")[-1]
+        step = re.search('ts.*\.', model_name).group(0)[:-1]
+        split = '_split' if 'split' in model_name else ''
+        dir_loc = os.path.dirname(model_path)
+        lr_glob = glob.glob(f"{dir_loc}/lr{split}_epoch0_{step}.{model_id}")
 
-    if len(lr_glob) > 1:
-        raise AttributeError("Too many lr specifications", ",".join(lr_glob))
-    elif len(lr_glob) == 0:
-        raise AttributeError("No lr specifications found")
+        if len(lr_glob) > 1:
+            raise AttributeError("Too many lr specifications", ",".join(lr_glob))
+        elif len(lr_glob) == 0:
+            raise AttributeError("No lr specifications found")
+        else:
+            print(f"Loading lrs {lr_glob[0]}")
+            lrs = torch.load(lr_glob[0])
     else:
-        print(f"Loading lrs {lr_glob[0]}")
-        lrs = torch.load(lr_glob[0])
+        lrs = torch.load(lr_path)
 
     return lrs
 
@@ -148,7 +158,7 @@ def performOneEdit(
             edit_template, edit_temp_mask, edit_labels
             ) = edit_package
 
-        idxProbs = getT5IndexedProbs
+        idxProbs = getClozeIndexedProbs
 
     logit_hist = []
     logit_hist.append(
@@ -295,8 +305,8 @@ def evalEditable(
                 break
 
 
-def processBatch(batch, lama=False):
-    if lama:
+def processBatch(batch, cloze=False, pad_token_id=0):
+    if cloze:
         (
             _, _, _,
             _, _, _,
@@ -307,8 +317,8 @@ def processBatch(batch, lama=False):
         edit_template = edit_template[:1]
         edit_temp_mask = edit_temp_mask[:1]
 
-        edit_tokens, edit_mask, _ = strip_padding(edit_tokens, edit_mask, edit_labels)
-        edit_template, edit_temp_mask, edit_labels = strip_padding(edit_template, edit_temp_mask, edit_labels)
+        edit_tokens, edit_mask, _ = strip_padding(edit_tokens, edit_mask, edit_labels, pad_token_id)
+        edit_template, edit_temp_mask, edit_labels = strip_padding(edit_template, edit_temp_mask, edit_labels, pad_token_id)
 
         edit_locs, gold_tokens = 0, edit_labels.flatten().unsqueeze(0).cpu()
 
@@ -343,7 +353,15 @@ def processBatch(batch, lama=False):
 
     return edit_package, edit_locs, gold_tokens
 
-
+def getPadTokenID(model):
+    
+    if isinstance(model, transformers.BartForConditionalGeneration):
+        return 1
+    elif isinstance(model, transformers.T5ForConditionalGeneration):
+        return 0
+    elif isinstance(model, transformers.GPT2LMHeadModel):
+        return 50256
+    
 def evalSelfSample(
     model,
     dataloader,
@@ -353,15 +371,17 @@ def evalSelfSample(
     loc="..",
     testset=False,
     copy_to="",
-    lama=False
+    cloze=False,
+    lr_path=None
     ):
 
+    pad_token_id = getPadTokenID(model)
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
     filename = f"edit_success_{timestamp}_{os.path.basename(model_name)}"
     saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}"
 
     try:
-        lrs = loadLr(model_name)
+        lrs = loadLr(model_name, lr_path)
     except AttributeError:
         print("No learning rates found!")
         lrs = []
@@ -373,23 +393,23 @@ def evalSelfSample(
 
     model_edited = copy.deepcopy(model).to(DEVICE)
 
-    orig_ppl = perplexity(model, dataloader, lama=lama)
+    orig_ppl = perplexity(model, dataloader, cloze=cloze, pad_token_id=pad_token_id)
     orig_params = get_params(model)
 
     with open(saveloc, "w") as f:
         f.write(
             "model_number,edit_number,train_step,n_edit_steps,edit_step,"
-            "logits,orig_ppl,new_ppl,norm\n"
+            "logits,orig_ppl,new_ppl,norm,accuracy\n"
             )
         for train_step, batch in enumerate(dataloader):
             print(f"Val Step {train_step}")
             print(f"Edit number {edit_number}")
             print(f"Model number {model_number}")
-            edit_package, edit_locs, gold_tokens = processBatch(batch, lama=lama)
+            edit_package, edit_locs, gold_tokens = processBatch(batch, cloze=cloze, pad_token_id=pad_token_id)
 
             model_edited, logit_hist, ll_change, loss = performOneEdit(
                 model_edited,
-                'cloze' if lama else 'gen',
+                'cloze' if cloze else 'gen',
                 lrs,
                 edit_package,
                 edit_locs,
@@ -398,7 +418,7 @@ def evalSelfSample(
             )
 
             if (edit_number + 1) % 20 == 0:
-                new_ppl = perplexity(model_edited, dataloader, lama=lama, iteration=n_edits)
+                new_ppl = perplexity(model_edited, dataloader, cloze=cloze, iteration=n_edits, pad_token_id=pad_token_id)
             else:
                 new_ppl = ""
 
@@ -407,7 +427,7 @@ def evalSelfSample(
             for idx, (val, acc) in enumerate(logit_hist):
                 run = (
                     model_number,edit_number,train_step, n_edit_steps, idx, val,
-                    orig_ppl,new_ppl, norm_diff
+                    orig_ppl,new_ppl, norm_diff, acc
                     )
                 form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
                 writeStr = ",".join([form(x) for x in run])
@@ -556,6 +576,7 @@ class ModelComps:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path', help='')
+    parser.add_argument('--lr_path', default=None)
     parser.add_argument('--test_set', action='store_true')
     parser.add_argument('--gen', action='store_true')
     parser.add_argument('--lama', action='store_true')
@@ -568,12 +589,16 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     loc = utils.sailPreprocess()
-
+    name = args.model if not args.gen else 'gpt2'
     if args.model_path: 
-        name = args.model if args.lama else 'gpt2'
         print(f"Using model {name}")
         model, tokenizer = utils.loadTrainedModel(args.model_path, name=name, cache_dir=loc,
                                                   split_params=args.split_params)
+    else:
+        print(f"Using OTS {name} model")
+        model, tokenizer = utils.loadOTSModel(name=name, cache_dir=loc)
+        utils.prep_for_maml(model)
+        args.model_path = f'OTS_{name}'
 
     ds = 'test' if args.test_set else 'validation'
 
@@ -594,7 +619,7 @@ if __name__ == "__main__":
             loc=loc,
             testset=args.test_set,
             copy_to=args.copy_to,
-            lama=False
+            cloze=False
             )
     elif args.lama:
         dataloader = MaskedLMDataloader(
@@ -618,7 +643,8 @@ if __name__ == "__main__":
             loc=loc,
             testset=args.test_set,
             copy_to=args.copy_to,
-            lama=True
+            cloze=True,
+            lr_path=args.lr_path
             )
     elif args.kilt:
         dataloader = MaskedLMDataloader(
@@ -639,7 +665,8 @@ if __name__ == "__main__":
             loc=loc,
             testset=args.test_set,
             copy_to=args.copy_to,
-            lama=True
+            cloze=True,
+            lr_path=args.lr_path
             )
 
     else:

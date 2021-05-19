@@ -85,7 +85,7 @@ class ClozeBartConfig:
         
         self.inner_lr = 1e-2
         self.outer_lr = 1e-4
-        self.epochs = 1
+        self.epochs = 2
         self.max_iter = 40000
         self.n_edit_steps = 1
         self.cedit = 5
@@ -94,7 +94,7 @@ class ClozeBartConfig:
         self.lr_lr = 1e-3
 
         self.debug = False
-        self.model_save_pt = 1000
+        self.model_save_pt = 5000
         self.write_loc = '..'
         self.ft_model_name = None
 

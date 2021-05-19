@@ -204,7 +204,7 @@ def wikiDataloader(
     return dataloader
 
 
-def wrap_model(model, name):
+def wrap_model(model, name, ortho=False):
     # find Conv1D layers to replace (they annoyingly have transposed weights)
     if name == 'gpt2':
         module_predicate = lambda mod: (
@@ -225,7 +225,7 @@ def wrap_model(model, name):
     else:
         raise ValueError(f"Invalid model type `{name}` specified")
 
-    ConditionalLinearWrapper.wrap_model(model, n_hidden, -1, module_predicate)
+    ConditionalLinearWrapper.wrap_model(model, n_hidden, -1, module_predicate, ortho=ortho)
 
 def prep_for_maml(model, adapt_all: bool = False):
     # Default inner loop adaptation parameters
@@ -255,6 +255,8 @@ def loadTrainedModel(
     ):
     model, tok = loadOTSModel(name=name, cache_dir=cache_dir)
     prep_for_maml(model, adapt_all)
+    if split_params:
+        wrap_model(model, name)
 
     try:
         model.load_state_dict(torch.load(modelPath))

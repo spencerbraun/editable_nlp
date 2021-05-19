@@ -9,6 +9,7 @@ from collections import defaultdict
 import numpy as np
 import torch
 import datasets
+import transformers
 from datasets import load_dataset
 
 import sys
@@ -60,7 +61,7 @@ class LAMADataset(torch.utils.data.IterableDataset):
             text,
             truncation=False,
             max_length=max_len,
-            padding=False if bart else "max_length",
+            padding="max_length",
             return_tensors='pt'
         )
         return tok["input_ids"], tok["attention_mask"]
@@ -223,6 +224,8 @@ class KILTDataset(torch.utils.data.IterableDataset):
         self.batch_size = batch_size
         self.tokenizer = tokenizer
         self.seed = seed
+        self.bart = isinstance(self.tokenizer, transformers.BartTokenizer)
+        print(f'Dataset is BART: {self.bart}')
         self.skip = 0
 
         self.raw_dataset = load_dataset(
@@ -292,16 +295,16 @@ class KILTDataset(torch.utils.data.IterableDataset):
                 no_relation = False
                 edit = random.choice(possible_relations)
                 if edit != label:
-                    edit_labels.append(f"<extra_id_0> {edit.strip()} <extra_id_1>")
+                    edit_labels.append(edit.strip())
                     break
 
             if no_relation:
                 continue
 
             train, test = random.sample(temps, 2)
-            train_sents.append(train.strip() + " <extra_id_0>")
-            test_sents.append(test.strip() + " <extra_id_0>")
-            labels.append(f"<extra_id_0> {label} <extra_id_1>")
+            train_sents.append(train.strip())
+            test_sents.append(test.strip())
+            labels.append(label)
 
         data_dict = {
             'template1': train_sents,
@@ -327,6 +330,10 @@ class KILTDataset(torch.utils.data.IterableDataset):
 
         random.seed(self.seed)
         np.random.seed(self.seed)
+        
+        sentMask = lambda sent: f"{sent} <extra_id_0>" if not self.bart else f"{sent} <mask>"
+        labelMask = lambda label: f"<extra_id_0> {label} <extra_id_1>" if not self.bart else label
+        
         while True:
             rng = np.random.default_rng(index + self.skip)
             edit_idxs = rng.choice(self.list_IDs, self.n_edits, replace=False)
@@ -336,11 +343,11 @@ class KILTDataset(torch.utils.data.IterableDataset):
             original_sent, edited_sent = [], []
             original_label, edited_label= [], []
             for idx in edit_idxs:
-                template1 = self.dataset['template1'][idx]
-                label = self.dataset['label'][idx]
+                template1 = sentMask(self.dataset['template1'][idx])
+                label = labelMask(self.dataset['label'][idx])
 
-                template2 = self.dataset['template2'][idx]
-                edit_label = self.dataset['edit_label'][idx]
+                template2 = sentMask(self.dataset['template2'][idx])
+                edit_label = labelMask(self.dataset['edit_label'][idx])
 
                 original_sent.append(self.tokenize(template1, 200))
                 original_label.append(self.tokenize(label, 50))
@@ -354,20 +361,20 @@ class KILTDataset(torch.utils.data.IterableDataset):
             edited_labels, edited_lab_mask = tuple(zip(*edited_label))
 
             loc_tokens, loc_mask = tuple(zip(*[
-                self.tokenize(self.dataset['template1'][idx], 200)
+                self.tokenize(sentMask(self.dataset['template1'][idx]), 200)
                 for idx in loc_idxs
                 ]))
             loc_labels, loc_lab_mask = tuple(zip(*[
-                self.tokenize(self.dataset['label'][idx], 50)
+                self.tokenize(labelMask(self.dataset['label'][idx]), 50)
                 for idx in loc_idxs
                 ]))
 
             base_tokens, base_mask = tuple(zip(*[
-                self.tokenize(self.dataset['template1'][idx], 200)
+                self.tokenize(sentMask(self.dataset['template1'][idx]), 200)
                 for idx in base_idxs
                 ]))
             base_labels, base_lab_mask = tuple(zip(*[
-                self.tokenize(self.dataset['label'][idx], 50)
+                self.tokenize(labelMask(self.dataset['label'][idx]), 50)
                 for idx in base_idxs
                 ]))
 

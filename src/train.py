@@ -56,7 +56,7 @@ class BaseTrainer:
                 project='patchable' if self.config.task == 'gen' else 'patchable_masked',
                 entity='patchable-lm',
                 config=self.config,
-                name=f"{self.config.task}{split}_{self.timestamp}",
+                name=f"{self.model_name}{split}_{self.config.task}_{self.config.ds}_{self.timestamp}",
                 dir=self.config.write_loc,
             )
             wandb.watch(self.model)
@@ -348,8 +348,8 @@ class SelfSampleTrainer(EditTrainer):
         self.validation_set = validation
 
         if self.config.split_params:
-            utils.wrap_model(self.model, self.model_name) 
-        
+            utils.wrap_model(self.model, self.model_name, self.config.ortho)
+
 
     def genModelText(self, lm_tokens):
 
@@ -397,7 +397,7 @@ class SelfSampleTrainer(EditTrainer):
         if self.config.task == 'gen':
             return tokens.to(self.device), mask.to(self.device), tokens.masked_fill(mask == 0, -100).to(self.device)
         elif self.config.task == 'cloze':
-            return (tokens.to(self.device), mask.to(self.device), 
+            return (tokens.to(self.device), mask.to(self.device),
             label.masked_fill(label == self.tokenizer.pad_token_id, -100).to(self.device))
 
     def strip_padding(self, tokens, mask, labels):
@@ -437,7 +437,7 @@ class SelfSampleTrainer(EditTrainer):
             for batch_idx, datapack in enumerate(subset):
                 if self.config.task == 'gen':
                     (_, _, _, _, _, _, edit_tokens, edit_mask, edit_labels) = datapack
-                    
+
                 elif self.config.task == 'cloze':
                     (
                         _, _, _,
@@ -448,13 +448,13 @@ class SelfSampleTrainer(EditTrainer):
                     edit_template = edit_template[:1]
                     edit_temp_mask = edit_temp_mask[:1]
                     edit_template, edit_temp_mask, _ = self.strip_padding(edit_template, edit_temp_mask, edit_labels)
-                    
+
                 edit_tokens = edit_tokens[:1]
                 edit_mask = edit_mask[:1]
                 edit_labels = edit_labels[:1]
 
                 edit_tokens, edit_mask, edit_labels = self.strip_padding(edit_tokens, edit_mask, edit_labels)
-                
+
                 if self.config.task == 'gen':
                     edit_locs, gold_tokens = self.get_edit_locs(edit_tokens, edit_labels)
                     edit_package = (edit_tokens, edit_mask, edit_labels)
@@ -495,7 +495,7 @@ class SelfSampleTrainer(EditTrainer):
             }
             if not self.config.debug:
                 self.wandb_log(self.val_iter * self.config.val_interval, metrics)
-            
+
         self.val_iter += 1
 
         self.model.train()
@@ -590,6 +590,7 @@ class SelfSampleTrainer(EditTrainer):
                                                edit_labels[edit_example_idx])
                             )
 
+
                         edit_out = fmodel(
                             edit_tokens_,
                             attention_mask=edit_mask_,
@@ -671,9 +672,9 @@ class SelfSampleTrainer(EditTrainer):
                 self.echo(train_step, **info_dict)
                 info_dict.update({f"lr/lr{i}":lr.data.item() for i, lr in enumerate(self.lrs)})
                 self.wandb_log(global_iter, info_dict)
-                self.saveState(self.model, global_iter, name=self.config.task)
+                self.saveState(self.model, global_iter, name=f"{self.model_name}_{self.config.task}_{self.config.ds}")
                 if self.config.learnable_lr:
-                    self.saveState(self.lrs, global_iter, name='lr')
+                    self.saveState(self.lrs, global_iter, name=f'lr_{self.model_name}')
                 if global_iter >= self.config.max_iter:
                     print("Reached max iterations")
                     break
@@ -686,13 +687,13 @@ class SelfSampleTrainer(EditTrainer):
                     if self.config.learnable_lr:
                         lr_opt.step()
                         lr_opt.zero_grad()
-            
+
                 if (train_step % self.config.val_interval == 0):
                     self.validateSelfSampleTraining()
 
-        self.saveState(self.model, global_iter, final=True, name=self.config.task)
+        self.saveState(self.model, global_iter, final=True, name=f"{self.model_name}_{self.config.task}_{self.config.ds}")
         if self.config.learnable_lr:
-            self.saveState(self.lrs, global_iter, final=True, name='lr')
+            self.saveState(self.lrs, global_iter, final=True, name=f'lr_{self.model_name}')
 
 
 if __name__ == "__main__":
@@ -710,6 +711,7 @@ if __name__ == "__main__":
     parser.add_argument('--gen', action='store_true')
     parser.add_argument('--lama', action='store_true')
     parser.add_argument('--kilt', action='store_true')
+    parser.add_argument('--ortho', action='store_true', default=False)
     parser.add_argument('--bs', default=1, type=int)
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--val_interval', type=int, default=200)
@@ -722,7 +724,7 @@ if __name__ == "__main__":
 
     loc = utils.sailPreprocess()
     tokenizer = utils.loadTokenizer(
-        name= 'gpt2' if not args.lama else args.model,
+        name= 'gpt2' if args.gen else args.model,
         cache_dir=loc)
 
     config = (
@@ -730,7 +732,7 @@ if __name__ == "__main__":
         EditConfig() if args.editable else
         SelfSampleGPT2Config() if args.gen else
         ClozeBartConfig() if args.model == 'bart-base' else
-        ClozeT5Config() 
+        ClozeT5Config()
     )
     config.write_loc = loc
     config.bs = args.bs
@@ -738,6 +740,9 @@ if __name__ == "__main__":
     config.split_params = args.split_params
     config.debug = args.debug if args.debug else config.debug
     config.val_interval = args.val_interval
+    config.ds = 'kilt' if args.kilt else 'lama' if args.lama else 'wikitext'
+    config.ortho = args.ortho
+
     if args.outer_lr is not None:
         print(f"Overriding default outer_lr {config.outer_lr} with new value {args.outer_lr}")
         config.outer_lr = args.outer_lr
@@ -810,6 +815,7 @@ if __name__ == "__main__":
         )
         train = dataloader.train
         validation = dataloader.validation
+
     else:
         dataloader = utils.wikiDataloader(
             tokenizer,
