@@ -15,13 +15,14 @@ class ConditionalLinearWrapper(nn.Module):
         n_hidden: Union[int, Callable],
         dim: int,
         predicate: Callable[[nn.Module], bool],
+        ortho: bool = False
     ):
         def _recursive_apply(module: nn.Module):
             n_wrapped = 0
             for idx, (name, mod) in enumerate(module.named_children()):
                 if predicate(mod):
                     num_hidden = n_hidden(mod) if isinstance(n_hidden, Callable) else n_hidden
-                    setattr(module, name, ConditionalLinearWrapper(mod, num_hidden, dim))
+                    setattr(module, name, ConditionalLinearWrapper(mod, num_hidden, dim, ortho=ortho))
                     n_wrapped += 1
                 else:
                     n_wrapped += _recursive_apply(mod)
@@ -69,14 +70,20 @@ class ConditionalLinearWrapper(nn.Module):
 
         return model
 
-    def __init__(self, module: nn.Module, size: int, dim: int = -1):
+    def __init__(self, module: nn.Module, size: int, dim: int = -1, ortho: bool = False):
         super().__init__()
 
         self.wrapped = module
-        self.weight = nn.Parameter(torch.eye(size))
+        if ortho:
+            self.idxs = torch.triu_indices(size,size)
+        else:
+            self.idxs = None
+        
+        self.weight = nn.Parameter(torch.eye(size) if not ortho else torch.zeros(size, size))
         self.weight.__conditioner__ = True
         self.active = False
         self.dim = dim
+        self.ortho = ortho
 
         def __deepcopy__(self, memo=None):
             new_data = torch.empty_like(self.data)
@@ -101,8 +108,15 @@ class ConditionalLinearWrapper(nn.Module):
                 x = out
 
             try:
+                if self.ortho:
+                    I = torch.eye(self.weight.shape[0], device=self.weight.device)
+                    A = self.weight.triu(1) - self.weight.triu(1).permute(-1,-2)
+                    weight = (I + A) @ (I - A).inverse()
+                else:
+                    weight = self.weight
+
                 x = (
-                    (x.movedim(self.dim, -1) @ self.weight)
+                    (x.movedim(self.dim, -1) @ weight)
                     .movedim(-1, self.dim)
                     .contiguous()
                 )
