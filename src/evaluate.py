@@ -43,7 +43,7 @@ def strip_padding(tokens, mask, labels, pad_token_id=0):
     label_mask = labels != pad_token_id
     labels = labels[label_mask].unsqueeze(0)
 
-    return tokens, mask, labels
+    return tokens.to(DEVICE), mask.to(DEVICE), labels.to(DEVICE)
 
 
 def perplexity(model, dataloader, cloze=False, iteration=0, pad_token_id=0):
@@ -73,6 +73,33 @@ def perplexity(model, dataloader, cloze=False, iteration=0, pad_token_id=0):
     avg_loss, ppl = acc.get_metrics()
     return torch.tensor(ppl)
 
+def drawdown(model, dataloader, iteration=0, pad_token_id=0):
+    model.to(DEVICE)
+    model.eval()
+    acc = utils.NLLAccumulator()
+
+    indices = np.random.default_rng(iteration).choice(len(dataloader), 200, replace=False)
+    subset = Subset(dataloader, indices)
+
+    probs = 0
+    accs = []
+    total_n = 0
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(subset):
+            (
+            lm_tokens, lm_mask, lm_labels,
+            _, _, _,
+            _, _, _,
+            _, _, _,
+            ) = batch
+            lm_tokens_, lm_mask_, lm_labels_ = strip_padding(lm_tokens, lm_mask, lm_labels, pad_token_id)
+            logit_sum, accuracy = getClozeIndexedProbs(model, 0, lm_labels_,lm_tokens_, lm_labels_, silent=False)
+            accs.append(accuracy)
+            probs += logit_sum
+            total_n += acc.n_predictions_for_labels(lm_labels_, offset=0)
+
+    return np.mean(accs), logit_sum / total_n
+
 def getIndexedProbs(model, index, gold_tokens, sent_tokens, labels):
 
     model.eval()
@@ -87,7 +114,7 @@ def getIndexedProbs(model, index, gold_tokens, sent_tokens, labels):
 
     return (logit_sum, accuracy)
 
-def getClozeIndexedProbs(model, index, gold_tokens, sent_tokens, labels):
+def getClozeIndexedProbs(model, index, gold_tokens, sent_tokens, labels, silent=False):
 
     model.eval()
     with torch.no_grad():
@@ -98,16 +125,18 @@ def getClozeIndexedProbs(model, index, gold_tokens, sent_tokens, labels):
         gold_tokens = gold_tokens.flatten().unsqueeze_(1).cpu()
         logit_sum = torch.sum(logits.gather(1, gold_tokens))
         accuracy = (output_lps.argmax(-1) == labels).all(-1).float().mean().cpu()
-        print('*'*50)
-        print(f"GOLD: {TOKENIZER.batch_decode(labels)}")
-        print(f"GUESS: {TOKENIZER.batch_decode(output_lps.argmax(-1))}")
-        print('*'*50)
+
+        if not silent:
+            print('*'*50)
+            print(f"GOLD: {TOKENIZER.batch_decode(labels)}")
+            print(f"GUESS: {TOKENIZER.batch_decode(output_lps.argmax(-1))}")
+            print('*'*50)
 
     model.train()
     return (logit_sum, accuracy)
 
 def loadLr(model_path, lr_path=None):
-    
+
     if not lr_path:
         model_name = os.path.basename(model_path)
         model_id = model_name.split(".")[-1]
@@ -124,12 +153,13 @@ def loadLr(model_path, lr_path=None):
             print(f"Loading lrs {lr_glob[0]}")
             lrs = torch.load(lr_glob[0])
     else:
+        print(f"Loading passed lrs {lr_path}")
         lrs = torch.load(lr_path)
 
     return lrs
 
 def performOneEdit(
-    model, 
+    model,
     task,
     lrs,
     edit_package,
@@ -354,14 +384,14 @@ def processBatch(batch, cloze=False, pad_token_id=0):
     return edit_package, edit_locs, gold_tokens
 
 def getPadTokenID(model):
-    
+
     if isinstance(model, transformers.BartForConditionalGeneration):
         return 1
     elif isinstance(model, transformers.T5ForConditionalGeneration):
         return 0
     elif isinstance(model, transformers.GPT2LMHeadModel):
         return 50256
-    
+
 def evalSelfSample(
     model,
     dataloader,
@@ -394,12 +424,16 @@ def evalSelfSample(
     model_edited = copy.deepcopy(model).to(DEVICE)
 
     orig_ppl = perplexity(model, dataloader, cloze=cloze, pad_token_id=pad_token_id)
+    if cloze:
+        orig_acc, orig_lp = drawdown(model, dataloader, iteration=n_edits, pad_token_id=pad_token_id)
+    else:
+        orig_acc, orig_lp = "", ""
     orig_params = get_params(model)
 
     with open(saveloc, "w") as f:
         f.write(
             "model_number,edit_number,train_step,n_edit_steps,edit_step,"
-            "logits,orig_ppl,new_ppl,norm,accuracy\n"
+            "logits,orig_ppl,new_ppl,orig_acc,new_acc,orig_lp,new_lp,norm,edit_accuracy\n"
             )
         for train_step, batch in enumerate(dataloader):
             print(f"Val Step {train_step}")
@@ -419,15 +453,18 @@ def evalSelfSample(
 
             if (edit_number + 1) % 20 == 0:
                 new_ppl = perplexity(model_edited, dataloader, cloze=cloze, iteration=n_edits, pad_token_id=pad_token_id)
+                if cloze:
+                    new_acc, new_lp = drawdown(model_edited, dataloader, iteration=n_edits, pad_token_id=pad_token_id)
             else:
                 new_ppl = ""
+                new_acc, new_lp = "", ""
 
             norm_diff = orig_params.sub(get_params(model_edited)).norm().item()
 
             for idx, (val, acc) in enumerate(logit_hist):
                 run = (
                     model_number,edit_number,train_step, n_edit_steps, idx, val,
-                    orig_ppl,new_ppl, norm_diff, acc
+                    orig_ppl,new_ppl,orig_acc,new_acc,orig_lp,new_lp,norm_diff,acc
                     )
                 form = lambda x: str(x.cpu().item()) if torch.is_tensor(x) else str(x)
                 writeStr = ",".join([form(x) for x in run])
@@ -581,6 +618,7 @@ if __name__ == "__main__":
     parser.add_argument('--gen', action='store_true')
     parser.add_argument('--lama', action='store_true')
     parser.add_argument('--kilt', action='store_true')
+    parser.add_argument('--ortho', action='store_true')
     parser.add_argument('--split_params', action='store_true')
     parser.add_argument('--edit_steps', default=5, type=int)
     parser.add_argument('--seq_edits', default=1, type=int)
@@ -590,10 +628,15 @@ if __name__ == "__main__":
 
     loc = utils.sailPreprocess()
     name = args.model if not args.gen else 'gpt2'
-    if args.model_path: 
+    if args.model_path:
         print(f"Using model {name}")
-        model, tokenizer = utils.loadTrainedModel(args.model_path, name=name, cache_dir=loc,
-                                                  split_params=args.split_params)
+        model, tokenizer = utils.loadTrainedModel(
+            args.model_path,
+            name=name,
+            cache_dir=loc,
+            split_params=args.split_params,
+            ortho=args.ortho
+        )
     else:
         print(f"Using OTS {name} model")
         model, tokenizer = utils.loadOTSModel(name=name, cache_dir=loc)
