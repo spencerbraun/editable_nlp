@@ -251,12 +251,13 @@ def loadTrainedModel(
     cache_dir=None, 
     tokenizer=True, 
     split_params: bool = False, 
-    adapt_all: bool = False
+    adapt_all: bool = False,
+    ortho: bool = False
     ):
     model, tok = loadOTSModel(name=name, cache_dir=cache_dir)
     prep_for_maml(model, adapt_all)
     if split_params:
-        wrap_model(model, name)
+        wrap_model(model, name, ortho=ortho)
 
     try:
         model.load_state_dict(torch.load(modelPath))
