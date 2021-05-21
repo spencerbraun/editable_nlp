@@ -171,7 +171,9 @@ def performOneEdit(
     edit_package,
     edit_locs,
     gold_tokens,
-    n_edit_steps=10
+    n_edit_steps=10,
+    mode="val",
+    delta=None
     ):
 
     if not hasattr(model, "inner_params"):
@@ -222,6 +224,17 @@ def performOneEdit(
             if hasattr(fmodel, "set_editing"):
                 fmodel.set_editing(False)
             diffopt.step(output.loss)
+
+            if mode == 'mmtm':
+                for p, fp in zip(model.parameters(), fmodel.parameters()):
+                    orig_p = p.data.detach()
+                    edited_p = fp.data.detach()
+                    fp.data = (
+                        orig_p + torch.clamp(
+                            torch.clamp(edited_p - orig_p, min=-delta),
+                            max=delta
+                        )
+                    )
 
             logit_hist.append(
                 idxProbs(fmodel, edit_locs, gold_tokens, edit_tokens,
@@ -409,6 +422,8 @@ def evalSelfSample(
     testset=False,
     copy_to="",
     cloze=False,
+    mmtm=False,
+    delta=None,
     lr_path=None
     ):
 
@@ -417,12 +432,15 @@ def evalSelfSample(
     filename = f"edit_success_{timestamp}_{os.path.basename(model_name)}"
     saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}"
 
-    try:
-        lrs = loadLr(model_name, lr_path)
-    except AttributeError as e:
-        print(e)
-        print("No learning rates found!")
-        lrs = []
+    if model_name.startswith('OTS'):
+        lrs = []  # Don't try to load lrs for OTS models
+    else:
+        try:
+            lrs = loadLr(model_name, lr_path)
+        except AttributeError as e:
+            print(e)
+            print("No learning rates found!")
+            lrs = []
 
     n_edits = 0
     edit_number = 0
@@ -456,7 +474,9 @@ def evalSelfSample(
                 edit_package,
                 edit_locs,
                 gold_tokens,
-                n_edit_steps=n_edit_steps
+                n_edit_steps=n_edit_steps,
+                mode=("mmtm" if mmtm else "val"),
+                delta=(delta if mmtm else None)
             )
 
             if (edit_number + 1) % 20 == 0:
@@ -631,6 +651,8 @@ if __name__ == "__main__":
     parser.add_argument('--edit_steps', default=5, type=int)
     parser.add_argument('--seq_edits', default=1, type=int)
     parser.add_argument('--model', type=str, default='bart-base')
+    parser.add_argument('--mmtm', action='store_true')
+    parser.add_argument('--delta', type=float, default=5.0e-3, help='Delta for MMTM')
     parser.add_argument('--copy_to')
     args = parser.parse_args()
 
@@ -670,7 +692,9 @@ if __name__ == "__main__":
             loc=loc,
             testset=args.test_set,
             copy_to=args.copy_to,
-            cloze=False
+            cloze=False,
+            mmtm=args.mmtm,
+            delta=args.delta
             )
     elif args.lama:
         dataloader = MaskedLMDataloader(
@@ -695,7 +719,9 @@ if __name__ == "__main__":
             testset=args.test_set,
             copy_to=args.copy_to,
             cloze=True,
-            lr_path=args.lr_path
+            lr_path=args.lr_path,
+            mmtm=args.mmtm,
+            delta=args.delta
             )
     elif args.kilt:
         dataloader = MaskedLMDataloader(
@@ -717,7 +743,9 @@ if __name__ == "__main__":
             testset=args.test_set,
             copy_to=args.copy_to,
             cloze=True,
-            lr_path=args.lr_path
+            lr_path=args.lr_path,
+            mmtm=args.mmtm,
+            delta=args.delta
             )
 
     else:
