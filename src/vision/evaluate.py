@@ -149,23 +149,50 @@ def performEdits(
             for edit_step in range(n_edit_steps):
                 if split_params:
                     fmodel.set_editing(True)
+
                 edit_logits = fmodel(edit_inputs)
                 # Only edit those examples which the model is not predicting correctly
                 edit_mask = torch.argmax(edit_logits, -1) != edit_labels
-                loss = F.cross_entropy(edit_logits[edit_mask], edit_labels[edit_mask])
+                edit_probs = edit_logits.softmax(1)
+                correct_probs = edit_probs.gather(1, edit_labels.view(-1, 1)).squeeze(1)[edit_mask]
+                loss = 0.0  # In case all examples are predicted correctly
+                loss -= (torch.clamp(correct_probs, min=1e-10, max=1)).log().sum() / len(edit_labels)
+
+                '''
+                loss = 0.0  # In case all examples are predicted correctly
+                loss += F.cross_entropy(edit_logits[edit_mask], edit_labels[edit_mask])
+                '''
+
                 if split_params:
                     fmodel.set_editing(False)
 
                 if not edit_mask.any():
                     break
 
-                diffopt.step(loss, grad_callback=clip_callback)
+                diffopt.step(loss, grad_callback=callback)
+                if mode == 'mmtm':
+                    for p, fp in zip(model.parameters(), fmodel.parameters()):
+                        orig_p = p.data.detach()
+                        edited_p = fp.data.detach()
+                        fp.data = (
+                            orig_p + torch.clamp(
+                                torch.clamp(edited_p - orig_p, min=-config.delta),
+                                max=config.delta
+                            )
+                        )
+
                 lp = get_logprobs(fmodel, edit_inputs, edit_labels)
                 lp_hist.append(lp.exp())
 
     edit_logits = fmodel(edit_inputs)
     edit_mask = torch.argmax(edit_logits, -1) != edit_labels
-    l_edit = F.cross_entropy(edit_logits[edit_mask], edit_labels[edit_mask])
+    edit_probs = edit_logits.softmax(1)
+    correct_probs = edit_probs.gather(1, edit_labels.view(-1, 1)).squeeze(1)[edit_mask]
+    l_edit = 0.0
+    l_edit -= (correct_probs + 1e-10).log().sum() / len(edit_labels)
+
+    # edit_mask = torch.argmax(edit_logits, -1) != edit_labels
+    # l_edit = F.cross_entropy(edit_logits[edit_mask], edit_labels[edit_mask])
 
     edit_success = (torch.argmax(edit_logits, -1) == edit_labels).float().mean().item() * 100.0
     prob_change = (abs(lp_hist[-1]) - abs(lp_hist[0]))#  / (abs(lp_hist[0]) + eps))
@@ -208,7 +235,10 @@ def evalEditable(
     savedir = os.path.join(config.run_dir, 'eval')
     if not os.path.exists(savedir):
         os.makedirs(savedir)
-    filename = f"edit_success_{os.path.basename(config.checkpoint_path)}"
+    filename = (
+        f"edit_success_mmtm_{os.path.basename(config.checkpoint_path)}" if config.mmtm
+        else f"edit_success_{os.path.basename(config.checkpoint_path)}"
+    )
     saveloc = os.path.join(savedir, filename)
 
     n_edits = 0
@@ -263,7 +293,7 @@ def evalEditable(
                 n_edit_steps=config.n_edit_steps,
                 lrs=lrs,
                 default_lr=1e-3,
-                mode="val",
+                mode=("mmtm" if config.mmtm else "val"),
                 split_params=config.split_params
             )
 
@@ -278,11 +308,14 @@ def evalEditable(
                 )
             ).sum(-1).mean()
 
+            '''
             total_edit_loss = (
                 config.cloc * l_loc  + 
                 config.cedit * l_edit
             )
             total_loss = l_base.item() + total_edit_loss.item()
+            '''
+            total_loss = None
 
             if edit_number % 20 == 0:
                 orig_acc1, orig_acc5 = evaluateOnDataset(model, val_dataset)
@@ -355,6 +388,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-C', '--checkpoint_path', type=str, help='(Relative or absolute) path of the checkpoint')
     parser.add_argument('-S', '--seq_edits', type=int, default=100)
+    parser.add_argument('--mmtm', action='store_true')
+    parser.add_argument('--delta', type=float, help='MMTM radius')
     args = parser.parse_args()
 
     checkpoint_path = os.path.abspath(args.checkpoint_path)
@@ -367,14 +402,16 @@ if __name__ == "__main__":
     config = compose(config_name='config', overrides=[
         f"+run_dir={run_dir}",
         f"+checkpoint_path={checkpoint_path}",
-        f"+seq_edits={args.seq_edits}"
+        f"+seq_edits={args.seq_edits}",
+        f"+mmtm={args.mmtm}",
+        f"+delta={args.delta}"
     ])
 
     random.seed(123)
     np.random.seed(123)
     torch.manual_seed(123)
-    torch.backends.cudnn.benchmark = False
-    torch.use_deterministic_algorithms(True)
+    # torch.backends.cudnn.benchmark = False
+    # torch.use_deterministic_algorithms(True)
 
     main(config)
 

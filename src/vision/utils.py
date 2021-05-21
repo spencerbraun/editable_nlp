@@ -5,8 +5,6 @@ import torch.nn as nn
 import torchvision.models as models
 import numpy as np
 
-eps = np.finfo(np.float32).eps.item()
-
 class AverageMeter(object):
     """
     Computes and stores the average and current value.
@@ -27,7 +25,7 @@ class AverageMeter(object):
         self.val = val
         self.sum += val * n
         self.count += n
-        self.avg = self.sum / (self.count + eps)
+        self.avg = self.sum / (self.count + 1e-10)
 
     def __str__(self):
         fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'

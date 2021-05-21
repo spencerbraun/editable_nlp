@@ -628,7 +628,7 @@ if __name__ == '__main__':
     random.seed(123)
     np.random.seed(123)
     torch.manual_seed(123)
-    torch.backends.cudnn.benchmark = False
-    torch.use_deterministic_algorithms(True)
+    # torch.backends.cudnn.benchmark = False
+    # torch.use_deterministic_algorithms(True)
     
     main()

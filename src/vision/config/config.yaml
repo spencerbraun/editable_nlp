@@ -11,3 +11,7 @@ ortho: False
 layernorm: False
 defaults:
   - experiment: base_cifar_resnet
+
+bs: 128
+edit_bs: 16
+n_edit_steps: 5

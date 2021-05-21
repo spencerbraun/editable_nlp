@@ -9,5 +9,5 @@
 script=$1
 
 source ../env/bin/activate
-echo "CUBLAS_WORKSPACE_CONFIG=:16:8 python3 -m vision.${script} experiment=base_cifar_resnet"
-CUBLAS_WORKSPACE_CONFIG=:16:8 python3 -m vision.${script} experiment=base_cifar_resnet
+echo "CUBLAS_WORKSPACE_CONFIG=:16:8 python3 -m vision.${script} experiment=base_cifar_resnet layernorm=True"
+CUBLAS_WORKSPACE_CONFIG=:16:8 python3 -m vision.${script} experiment=base_cifar_resnet layernorm=True
