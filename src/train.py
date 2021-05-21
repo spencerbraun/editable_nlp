@@ -4,6 +4,7 @@ import glob
 import time
 import random
 from datetime import datetime
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -59,7 +60,6 @@ class BaseTrainer:
                 name=f"{self.model_name}{split}_{self.config.task}_{self.config.ds}_{self.timestamp}",
                 dir=self.config.write_loc,
             )
-            wandb.watch(self.model)
             transformers.logging.set_verbosity_info()
 
         self.epoch = 0
@@ -127,7 +127,7 @@ class BaseTrainer:
                 l_base = base_out.loss
                 l_base.backward()
 
-                if train_step % 5 == 0:
+                if train_step % self.config.bs == 0:
                     opt.step()
                     opt.zero_grad()
 
@@ -310,7 +310,7 @@ class EditTrainer(BaseTrainer):
                     total_loss.backward()
 
                 # accumulate grads
-                if train_step % 5 == 0:
+                if train_step % self.config.bs == 0:
                     opt.step()
                     opt.zero_grad()
 
@@ -519,21 +519,22 @@ class SelfSampleTrainer(EditTrainer):
         lr_opt = torch.optim.Adam(self.lrs, lr=self.config.lr_lr)
 
         skip_count = 0
+        info_dict_ = defaultdict(list)
 
         for epoch in range(self.config.epochs):
             self.epoch = epoch
-
             for train_step, datapack in enumerate(self.data):
                 if self.config.task == 'gen':
-                    (lm_tokens, lm_mask, loc_tokens, loc_mask, _, _, edit_tokens, edit_mask, edit_labels) = datapack
+                    (lm_tokens, lm_mask, loc_tokens, loc_mask, _, _, edit_inner, edit_inner_mask, edit_labels) = datapack
                     lm_tokens, lm_mask, lm_labels = self.mask_padding(lm_tokens, lm_mask)
                     loc_tokens, loc_mask, loc_labels = self.mask_padding(loc_tokens, loc_mask)
+                    edit_outer, edit_outer_mask = edit_inner, edit_inner_mask
                 elif self.config.task == 'cloze':
                     (
                         lm_tokens, lm_mask, lm_labels,
                         loc_tokens, loc_mask, loc_labels,
-                        edit_tokens, edit_mask, edit_labels,
-                        edit_template, edit_temp_mask, edit_labels
+                        edit_outer, edit_outer_mask, edit_labels,
+                        edit_inner, edit_inner_mask, edit_labels,
                     ) = datapack
 
                     lm_tokens, lm_mask, lm_labels = self.mask_padding(lm_tokens, lm_mask, lm_labels)
@@ -546,6 +547,18 @@ class SelfSampleTrainer(EditTrainer):
                     p_cache[n] = p.data.detach().clone()
 
                 for edit_example_idx in range(self.config.n_edits):
+                    edit_inner_tokens_, edit_inner_mask_, edit_labels_ = (
+                        self.strip_padding(edit_inner[edit_example_idx],
+                                           edit_inner_mask[edit_example_idx],
+                                           edit_labels[edit_example_idx])
+                    )
+
+                    edit_outer_tokens_, edit_outer_mask_, _ = (
+                        self.strip_padding(edit_outer[edit_example_idx],
+                                           edit_outer_mask[edit_example_idx],
+                                           edit_labels[edit_example_idx])
+                    )
+                    
                     param_groups = [
                         {'params': p, 'lr': None}
                         for p in self.model.inner_params()
@@ -565,35 +578,21 @@ class SelfSampleTrainer(EditTrainer):
                             copy_initial_weights=False,
                             track_higher_grads=True
                     ) as (fmodel, diffopt):
-                        edit_tokens_, edit_mask_, edit_labels_ = (
-                            self.strip_padding(edit_template[edit_example_idx],
-                                               edit_temp_mask[edit_example_idx],
-                                               edit_labels[edit_example_idx])
-                        )
                         for edit_step in range(self.config.n_edit_steps):
                             if self.config.split_params:
                                 fmodel.set_editing(True)
-
                             loss = fmodel(
-                                edit_tokens_,
-                                attention_mask=edit_mask_,
+                                edit_inner_tokens_,
+                                attention_mask=edit_inner_mask_,
                                 labels=edit_labels_
                             ).loss
                             if self.config.split_params:
                                 fmodel.set_editing(False)
                             diffopt.step(loss)
 
-                        if self.config.task == 'cloze':
-                            edit_tokens_, edit_mask_, edit_labels_ = (
-                            self.strip_padding(edit_tokens[edit_example_idx],
-                                               edit_mask[edit_example_idx],
-                                               edit_labels[edit_example_idx])
-                            )
-
-
                         edit_out = fmodel(
-                            edit_tokens_,
-                            attention_mask=edit_mask_,
+                            edit_outer_tokens_,
+                            attention_mask=edit_outer_mask_,
                             labels=edit_labels_
                         )
                         l_edit = edit_out.loss
@@ -669,18 +668,17 @@ class SelfSampleTrainer(EditTrainer):
                     info_dict["grad/all"] = torch.nn.utils.clip_grad_norm_(self.model.parameters(), 50)
                     info_dict['grad/lrs'] = torch.nn.utils.clip_grad_norm_(self.lrs, 50).item()
 
-                self.echo(train_step, **info_dict)
-                info_dict.update({f"lr/lr{i}":lr.data.item() for i, lr in enumerate(self.lrs)})
-                self.wandb_log(global_iter, info_dict)
-                self.saveState(self.model, global_iter, name=f"{self.model_name}_{self.config.task}_{self.config.ds}")
-                if self.config.learnable_lr:
-                    self.saveState(self.lrs, global_iter, name=f'lr_{self.model_name}')
-                if global_iter >= self.config.max_iter:
-                    print("Reached max iterations")
-                    break
-
+                for k, v in info_dict.items():
+                    info_dict_[k].append(v)
+                
                 # accumulate grads
                 if train_step % 5 == 0:
+                    means = {k: sum(v) / len(v) for (k,v) in info_dict_.items()}
+                    self.echo(train_step, **means)
+                    means.update({f"lr/lr{i}":lr.data.item() for i, lr in enumerate(self.lrs)})
+                    self.wandb_log(global_iter, means)
+                    info_dict_ = defaultdict(list)
+                    
                     opt.step()
                     opt.zero_grad()
 
@@ -690,6 +688,13 @@ class SelfSampleTrainer(EditTrainer):
 
                 if (train_step % self.config.val_interval == 0):
                     self.validateSelfSampleTraining()
+                
+                self.saveState(self.model, global_iter, name=f"{self.model_name}_{self.config.task}_{self.config.ds}")
+                if self.config.learnable_lr:
+                    self.saveState(self.lrs, global_iter, name=f'lr_{self.model_name}')
+                if global_iter >= self.config.max_iter:
+                    print("Reached max iterations")
+                    break
 
         self.saveState(self.model, global_iter, final=True, name=f"{self.model_name}_{self.config.task}_{self.config.ds}")
         if self.config.learnable_lr:
@@ -712,7 +717,7 @@ if __name__ == "__main__":
     parser.add_argument('--lama', action='store_true')
     parser.add_argument('--kilt', action='store_true')
     parser.add_argument('--ortho', action='store_true', default=False)
-    parser.add_argument('--bs', default=1, type=int)
+    parser.add_argument('--bs', default=5, type=int)
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--val_interval', type=int, default=200)
     parser.add_argument('--outer_lr', type=float, default=None)
@@ -729,7 +734,6 @@ if __name__ == "__main__":
 
     config = (
         TrainConfig() if args.finetune else
-        EditConfig() if args.editable else
         SelfSampleGPT2Config() if args.gen else
         ClozeBartConfig() if args.model == 'bart-base' else
         ClozeT5Config()
@@ -756,7 +760,7 @@ if __name__ == "__main__":
         print(f"Overriding default cloc {config.cloc} with new value {args.cloc}")
         config.cloc = args.cloc
 
-    if (args.editable or args.gen):
+    if args.gen:
         train = utils.retrieveUnifiedDataset(
             tokenizer,
             data_loc=config.write_loc,
@@ -771,23 +775,6 @@ if __name__ == "__main__":
             bs=1,
             dataset='validation',
             self_sample=True,
-            n_edits=args.n_edits
-        )
-    elif args.editable:
-        train = utils.retrieveEditDataloader(
-            tokenizer,
-            data_loc=loc,
-            bs=args.bs,
-            dataset='train',
-            self_sample=args.self_sample,
-            n_edits=args.n_edits
-        )
-        validation = utils.retrieveEditDataloader(
-            tokenizer,
-            data_loc=loc,
-            bs=args.bs,
-            dataset='validation',
-            self_sample=args.self_sample,
             n_edits=args.n_edits
         )
     elif args.lama:
@@ -827,10 +814,7 @@ if __name__ == "__main__":
             min_length=20
         )
 
-    if args.editable:
-        trainer = EditTrainer(config, train, validation)
-
-    elif args.finetune:
+    if args.finetune:
         trainer = BaseTrainer(config, dataloader)
 
     elif (args.gen or args.lama or args.kilt):

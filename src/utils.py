@@ -206,11 +206,13 @@ def wikiDataloader(
 
 def wrap_model(model, name, ortho=False):
     # find Conv1D layers to replace (they annoyingly have transposed weights)
+    modules = None
     if name == 'gpt2':
         module_predicate = lambda mod: (
             isinstance(mod, transformers.models.gpt2.modeling_gpt2.Conv1D) and mod.weight.shape[1] == 768
         )
         n_hidden = model.config.n_embd
+        modules = model.transformer.h[-6:]
     elif name == 'bart-base':
         module_predicate = lambda mod: (
             isinstance(mod, transformers.models.bart.modeling_bart.BartDecoderLayer) or
@@ -225,7 +227,7 @@ def wrap_model(model, name, ortho=False):
     else:
         raise ValueError(f"Invalid model type `{name}` specified")
 
-    ConditionalLinearWrapper.wrap_model(model, n_hidden, -1, module_predicate, ortho=ortho)
+    ConditionalLinearWrapper.wrap_model(model, n_hidden, -1, module_predicate, ortho=ortho, modules=modules)
 
 def prep_for_maml(model, adapt_all: bool = False):
     # Default inner loop adaptation parameters

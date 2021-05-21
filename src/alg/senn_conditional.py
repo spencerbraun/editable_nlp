@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from typing import Callable, List, Union
 import inspect
 
@@ -15,7 +16,8 @@ class ConditionalLinearWrapper(nn.Module):
         n_hidden: Union[int, Callable],
         dim: int,
         predicate: Callable[[nn.Module], bool],
-        ortho: bool = False
+        ortho: bool = False,
+        modules = None
     ):
         def _recursive_apply(module: nn.Module):
             n_wrapped = 0
@@ -30,7 +32,7 @@ class ConditionalLinearWrapper(nn.Module):
             return n_wrapped
 
         # Recursively replace each nn.Linear in the model with a ConditionerLinear
-        n_wrapped = _recursive_apply(model)
+        n_wrapped = _recursive_apply(model if not modules else modules)
         print(f"Wrapped {n_wrapped} modules using predicate:\n{inspect.getsource(predicate)}")
 
         # A convenience function to enable/disable editing
@@ -78,9 +80,10 @@ class ConditionalLinearWrapper(nn.Module):
             self.idxs = torch.triu_indices(size,size)
         else:
             self.idxs = None
-        
+
         self.weight = nn.Parameter(torch.eye(size) if not ortho else torch.zeros(size, size))
         self.weight.__conditioner__ = True
+
         self.active = False
         self.dim = dim
         self.ortho = ortho
@@ -115,14 +118,13 @@ class ConditionalLinearWrapper(nn.Module):
                 else:
                     weight = self.weight
 
-                x = (
-                    (x.movedim(self.dim, -1) @ weight)
-                    .movedim(-1, self.dim)
-                    .contiguous()
-                )
+                x = x.movedim(self.dim, -1)
+                x = x @ weight
+                x = x.movedim(-1, self.dim).contiguous()
+                
             except Exception as e:
                 print(e)
-                breakpoint()
+                import pdb; pdb.set_trace()
 
             if not isinstance(out, torch.Tensor):
                 out = (x,) + out[1:]

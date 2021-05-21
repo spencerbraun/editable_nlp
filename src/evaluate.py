@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 from IPython.display import display
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-TOKENIZER = utils.loadTokenizer(name='bart-base', cache_dir='/juice/scr/spencerb/results/')
+TOKENIZER = None
 
 def get_params(model):
     return torch.cat([p.view(-1) for p in model.parameters()])
@@ -127,6 +127,9 @@ def getClozeIndexedProbs(model, index, gold_tokens, sent_tokens, labels, silent=
         accuracy = (output_lps.argmax(-1) == labels).all(-1).float().mean().cpu()
 
         if not silent:
+            global TOKENIZER
+            if TOKENIZER is None:
+                TOKENIZER = utils.loadTokenizer(name='bart-base', cache_dir='/juice/scr/spencerb/results/')
             print('*'*50)
             print(f"GOLD: {TOKENIZER.batch_decode(labels)}")
             print(f"GUESS: {TOKENIZER.batch_decode(output_lps.argmax(-1))}")
@@ -138,13 +141,16 @@ def getClozeIndexedProbs(model, index, gold_tokens, sent_tokens, labels, silent=
 def loadLr(model_path, lr_path=None):
 
     if not lr_path:
-        model_name = os.path.basename(model_path)
-        model_id = model_name.split(".")[-1]
-        step = re.search('ts.*\.', model_name).group(0)[:-1]
-        split = '_split' if 'split' in model_name else ''
         dir_loc = os.path.dirname(model_path)
-        lr_glob = glob.glob(f"{dir_loc}/lr{split}_epoch0_{step}.{model_id}")
 
+        if '_split' in model_path:
+            idx = model_path.rindex('split')
+        else:
+            idx = model_path.rindex('epoch')
+        ext = model_path[idx:]
+
+        lr_glob = glob.glob(f"{dir_loc}/lr_*{ext}")
+        
         if len(lr_glob) > 1:
             raise AttributeError("Too many lr specifications", ",".join(lr_glob))
         elif len(lr_glob) == 0:
@@ -184,8 +190,8 @@ def performOneEdit(
         idxProbs = getIndexedProbs
     elif task == 'cloze':
         (
-            edit_tokens, edit_mask, edit_labels,
-            edit_template, edit_temp_mask, edit_labels
+            edit_outer, edit_outer_mask, _,
+            edit_inner, edit_inner_mask, edit_labels,
             ) = edit_package
 
         idxProbs = getClozeIndexedProbs
@@ -209,8 +215,8 @@ def performOneEdit(
             if hasattr(fmodel, "set_editing"):
                 fmodel.set_editing(True)
             output = fmodel(
-                edit_template,
-                attention_mask=edit_temp_mask,
+                edit_tokens,
+                attention_mask=edit_mask,
                 labels=edit_labels
             )
             if hasattr(fmodel, "set_editing"):
@@ -222,14 +228,15 @@ def performOneEdit(
                 None if task == 'gen' else edit_labels),
             )
 
+        ll_change = (abs(logit_hist[0][0]) - abs(logit_hist[-1][0]))/abs(logit_hist[0][0])
         prob_change = logit_hist[-1][0].exp() - logit_hist[0][0].exp()
         print(f"prob history: {[l[0].exp() for l in logit_hist]}")
-        print(f"Edit step {edit_step}; prob change {prob_change}; logit {logit_hist[-1][0]}; loss {output.loss}")
+        print(f"Edit step {edit_step}; d_prob {prob_change}; ll change {ll_change}; logit {logit_hist[-1][0]}; loss {output.loss}")
 
     edited_model = copy.deepcopy(model)
     edited_model.load_state_dict(fmodel.state_dict())
 
-    return edited_model, logit_hist, prob_change, output.loss
+    return edited_model, logit_hist, ll_change, output.loss
 
 def genModelText(finetuned, lm_tokens):
 
@@ -412,7 +419,8 @@ def evalSelfSample(
 
     try:
         lrs = loadLr(model_name, lr_path)
-    except AttributeError:
+    except AttributeError as e:
+        print(e)
         print("No learning rates found!")
         lrs = []
 
