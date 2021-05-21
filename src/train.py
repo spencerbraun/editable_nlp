@@ -41,7 +41,7 @@ class BaseTrainer:
             )
 
         #outfiles
-        self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")
         self.hyperspath = f"{self.model_dir}/hypers.{self.timestamp}"
         self.errpath = f"{self.config.write_loc}/errors/errors_{self.timestamp}"
         ewc = '_ewc' if self.config.ewc else ''
