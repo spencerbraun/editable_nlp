@@ -3,7 +3,7 @@
 task: editable
 model: resnet18
 pretrained: False
-model_path: models/cifar/resnet18/finetune/finetune_epoch199_ts9999.20210429.19.04.1619750982
+model_path: src/outputs/2021-05-20/15-15-39/models/finetune_epoch199_ts9999.2021-05-20.15-15-39  # models/cifar/resnet18/finetune/finetune_epoch199_ts9999.20210429.19.04.1619750982
 dataset: cifar10
 bs: 128
 
