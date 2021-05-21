@@ -185,7 +185,7 @@ def performOneEdit(
         {'params': p, 'lr': 1e-3}
         for p in model.inner_params()
     ]
-    inner_opt = (torch.optim.SGD(param_groups))
+    inner_opt = torch.optim.Adam(param_groups) if mode == "mmtm" else torch.optim.SGD(param_groups)
 
     if task == 'gen':
         edit_tokens, edit_mask, edit_labels = edit_package
