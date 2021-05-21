@@ -7,8 +7,8 @@ dataset: cifar10
 bs: 128
 
 loss: cross_entropy
-outer_lr: 0.001
-epochs: 200
+outer_lr: 0.01
+epochs: 100
 
 learnable_lr: False
 split_params: False

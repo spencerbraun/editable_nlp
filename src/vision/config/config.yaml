@@ -8,5 +8,6 @@ cbase: 1
 lr_grad_clip: null
 weight_decay: null
 ortho: False
+layernorm: False
 defaults:
   - experiment: base_cifar_resnet

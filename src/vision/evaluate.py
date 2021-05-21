@@ -107,7 +107,7 @@ def performEdits(
     split_params=False
 ):
     INNER_GRAD_NORMS = []
-    MAX_NORM = 10000
+    MAX_NORM = 1000
 
     def clip_callback(all_grads):
         nonlocal INNER_GRAD_NORMS
@@ -150,16 +150,23 @@ def performEdits(
                 if split_params:
                     fmodel.set_editing(True)
                 edit_logits = fmodel(edit_inputs)
-                loss = F.cross_entropy(edit_logits, edit_labels)
+                # Only edit those examples which the model is not predicting correctly
+                edit_mask = torch.argmax(edit_logits, -1) != edit_labels
+                loss = F.cross_entropy(edit_logits[edit_mask], edit_labels[edit_mask])
                 if split_params:
                     fmodel.set_editing(False)
 
-                diffopt.step(loss, grad_callback=callback)
+                if not edit_mask.any():
+                    break
+
+                diffopt.step(loss, grad_callback=clip_callback)
                 lp = get_logprobs(fmodel, edit_inputs, edit_labels)
                 lp_hist.append(lp.exp())
 
     edit_logits = fmodel(edit_inputs)
-    l_edit = F.cross_entropy(edit_logits, edit_labels)
+    edit_mask = torch.argmax(edit_logits, -1) != edit_labels
+    l_edit = F.cross_entropy(edit_logits[edit_mask], edit_labels[edit_mask])
+
     edit_success = (torch.argmax(edit_logits, -1) == edit_labels).float().mean().item() * 100.0
     prob_change = (abs(lp_hist[-1]) - abs(lp_hist[0]))#  / (abs(lp_hist[0]) + eps))
     print("Mean prob history:", ["{:.2f}".format(i.mean().item()) for i in lp_hist])

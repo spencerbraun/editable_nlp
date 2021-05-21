@@ -39,7 +39,7 @@ class BaseTrainer:
 
         num_classes = len(train_set.classes)
         load_model = densenet169 if config.model == 'densenet169' else resnet18
-        self.model = utils.loadOTSModel(load_model, num_classes, self.config.pretrained)
+        self.model = utils.loadOTSModel(load_model, num_classes, self.config.pretrained, layernorm=self.config.layernorm)
         if not self.config.pretrained and self.config.model_path:
             model_path = os.path.join(self.config.loc, self.config.model_path)
             self.model.load_state_dict(torch.load(model_path))
@@ -239,7 +239,7 @@ class EditTrainer(BaseTrainer):
     def __init__(self, config, train_set, val_set, model_path=None):
         super().__init__(config, train_set, val_set)
         if self.config.model == 'resnet18':
-            utils.prep_resnet_for_maml(self.model)
+            utils.prep_resnet_for_maml(self.model, layers=[3])
         elif self.config.model == 'densenet169':
             utils.prep_densenet_for_maml(self.model)
 
@@ -278,7 +278,8 @@ class EditTrainer(BaseTrainer):
         for n, p in self.model.named_parameters():
             p_cache[n] = p.data.detach().clone()
 
-        self.model.eval()  # Use running statistics for edits and locality loss
+        self.model.train()  # Use running statistics for edits and locality loss
+        backprop_idx = random.randrange(self.config.n_edits)
         for edit_example_idx in range(self.config.n_edits):
             edit_inputs, edit_labels = next(self.train_edit_gen)
             edit_inputs, edit_labels = edit_inputs.to(self.device), edit_labels.to(self.device)
@@ -293,37 +294,40 @@ class EditTrainer(BaseTrainer):
                 mode="train",
                 split_params=self.config.split_params
             )
-            sum_l_edit += l_edit.item() / self.config.n_edits
-            self.verbose_echo(f"Computed edit loss: {l_edit}")
 
-            with torch.no_grad():
-                loc_logits = self.model(loc_inputs)
-            edited_loc_logits = model_edited(loc_inputs)
+            if edit_example_idx == backprop_idx:
+                sum_l_edit += l_edit.item()
+                self.verbose_echo(f"Computed edit loss: {l_edit}")
 
-            l_loc = (
-                loc_logits.softmax(-1).detach() * (
-                    loc_logits.log_softmax(-1).detach() -
-                    edited_loc_logits.log_softmax(-1)
+                with torch.no_grad():
+                    loc_logits = self.model(loc_inputs)
+                model_edited.train()
+                edited_loc_logits = model_edited(loc_inputs)
+
+                l_loc = (
+                    loc_logits.softmax(-1).detach() * (
+                        loc_logits.log_softmax(-1).detach() -
+                        edited_loc_logits.log_softmax(-1)
+                    )
+                ).sum(-1).mean()
+                sum_l_loc += l_loc.item()
+                self.verbose_echo(f"Computed locality loss: {l_loc}")
+
+                total_edit_loss = (
+                    self.config.cloc * l_loc  + 
+                    self.config.cedit * l_edit
                 )
-            ).sum(-1).mean()
-            sum_l_loc += l_loc.item() / self.config.n_edits
-            self.verbose_echo(f"Computed locality loss: {l_loc}")
 
-            total_edit_loss = (
-                self.config.cloc * l_loc  + 
-                self.config.cedit * l_edit
-            ) / self.config.n_edits
-
-            if not self.config.split_params or edit_example_idx == 0:
-                total_edit_loss.backward()
-            else:
-                # Only train phi/lrs using edit loss, not theta
-                edit_params = self.model.phi() + self.lrs
-                for p, g in zip(edit_params, A.grad(total_edit_loss, edit_params)):
-                    if p.grad is not None:
-                        p.grad += g
-                    else:
-                        p.grad = g.clone()
+                if not self.config.split_params or edit_example_idx == 0:
+                    total_edit_loss.backward()
+                else:
+                    # Only train phi/lrs using edit loss, not theta
+                    edit_params = self.model.phi() + self.lrs
+                    for p, g in zip(edit_params, A.grad(total_edit_loss, edit_params)):
+                        if p.grad is not None:
+                            p.grad += g
+                        else:
+                            p.grad = g.clone()
             
             for fp, p in zip(model_edited.parameters(), self.model.parameters()):
                 p.data = fp.data.detach()
@@ -370,6 +374,7 @@ class EditTrainer(BaseTrainer):
         if self.config.split_params:
             info_dict['grad/phi'] = nn.utils.clip_grad_norm_(self.model.phi(), 50).item()
             info_dict['grad/theta'] = nn.utils.clip_grad_norm_(self.model.theta(), 50).item()
+            info_dict['norm_phi'] = torch.cat([p.flatten() for p in self.model.phi()]).norm().detach()
         else:
             info_dict['grad/all'] = nn.utils.clip_grad_norm_(self.model.parameters(), 50).item()
         if self.config.lr_grad_clip:
@@ -424,7 +429,7 @@ class EditTrainer(BaseTrainer):
                 loc_inputs, loc_labels = loc_inputs.to(self.device), loc_labels.to(self.device)
                 edit_inputs, edit_labels = edit_inputs.to(self.device), edit_labels.to(self.device)
 
-                self.model.eval()
+                self.model.train()
                 l_base, base_logits = self.compute_base_loss(self.model, base_inputs, base_labels)
                 self.verbose_echo(f"Computed base loss: {l_base}")
 
@@ -449,7 +454,7 @@ class EditTrainer(BaseTrainer):
 
                 self.verbose_echo(f"Computed edit loss: {l_edit}")
 
-                model_edited.eval()
+                model_edited.train()
                 loc_logits = self.model(loc_inputs)
                 edited_loc_logits = model_edited(loc_inputs)
                 l_loc = (
