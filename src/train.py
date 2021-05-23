@@ -44,10 +44,11 @@ class BaseTrainer:
         self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.hyperspath = f"{self.model_dir}/hypers.{self.timestamp}"
         self.errpath = f"{self.config.write_loc}/errors/errors_{self.timestamp}"
+        ewc = '_ewc' if self.config.ewc else ''
         split = '_split' if self.config.split_params else ''
         self.statepath = (
             lambda model, epoch, step:
-            f"{self.model_dir}/{model}{split}_epoch{epoch}_ts{step}.{self.timestamp}"
+            f"{self.model_dir}/{model}{ewc}{split}_epoch{epoch}_ts{step}.{self.timestamp}"
             )
 
         self.data = dataloader
@@ -57,7 +58,7 @@ class BaseTrainer:
                 project='patchable' if self.config.task == 'gen' else 'patchable_masked',
                 entity='patchable-lm',
                 config=self.config,
-                name=f"{self.model_name}{split}_{self.config.task}_{self.config.ds}_{self.timestamp}",
+                name=f"{self.model_name}{ewc}{split}_{self.config.task}_{self.config.ds}_{self.timestamp}",
                 dir=self.config.write_loc,
             )
             transformers.logging.set_verbosity_info()
@@ -701,6 +702,227 @@ class SelfSampleTrainer(EditTrainer):
             self.saveState(self.lrs, global_iter, final=True, name=f'lr_{self.model_name}')
 
 
+class EWCTrainer(SelfSampleTrainer):
+    def __init__(self, config, train, validation, weight=1e-7, model_path=None):
+        super().__init__(config, train, validation, model_path=None)
+
+        self.weight = weight
+        self._update_mean()
+        self._update_fisher(self.data)
+
+    def _update_mean(self):
+        print("Estimating parameter means")
+        for n, p in self.model.named_parameters():
+            buffer_name = n.replace('.', '__')
+            self.model.register_buffer(buffer_name + '_mean', p.data.clone())
+
+    def _update_fisher(self, dataloader, n_batches=10000):
+        print("Estimating parameter Fisher matrices")
+        grads = [None] * len(list(self.model.parameters()))  # Store the sum of gradients of log likelihoods
+        n_samples = 0
+        for batch_idx, datapack in enumerate(dataloader):
+            if batch_idx >= n_batches:
+                break
+
+            if self.config.task == 'gen':
+                (lm_tokens, lm_mask, _, _, _, _, _, _, _) = datapack
+                lm_tokens, lm_mask, lm_labels = self.mask_padding(lm_tokens, lm_mask)
+            elif self.config.task == 'cloze':
+                (
+                    lm_tokens, lm_mask, lm_labels,
+                    _, _, _,
+                    _, _, _,
+                    _, _, _,
+                ) = datapack
+                lm_tokens, lm_mask, lm_labels = self.mask_padding(lm_tokens, lm_mask, lm_labels)
+
+            model_out = self.model(
+                lm_tokens,
+                attention_mask=lm_mask,
+                labels=lm_labels
+            )
+            ll = F.log_softmax(model_out.logits, -1).sum()
+            for g_idx, g in enumerate(A.grad(ll, self.model.parameters())):
+                grads[g_idx] = g if grads[g_idx] is None else (grads[g_idx] + g)
+            n_samples += lm_tokens.shape[0]
+
+        for (n, p), g in zip(self.model.named_parameters(), grads):
+            buffer_name = n.replace('.', '__')
+            g_avg = g / n_samples
+            self.model.register_buffer(buffer_name + '_fisher', g_avg.data.clone() ** 2)
+
+
+    def run(self):
+        if not self.config.debug:
+            torch.save(self.config, self.hyperspath)
+
+        self.model.train()
+        self.model.to(self.device)
+        opt = torch.optim.Adam(self.model.parameters(), self.config.outer_lr)
+
+        global_iter = 0
+        print("Starting Training")
+
+        self.lrs = [
+            torch.nn.Parameter(torch.tensor(self.config.inner_lr))
+            for p in self.model.inner_params()
+            ]
+        lr_opt = torch.optim.Adam(self.lrs, lr=self.config.lr_lr)
+
+        skip_count = 0
+        info_dict_ = defaultdict(list)
+
+        for epoch in range(self.config.epochs):
+            self.epoch = epoch
+            for train_step, datapack in enumerate(self.data):
+                if self.config.task == 'gen':
+                    (lm_tokens, lm_mask, loc_tokens, loc_mask, _, _, edit_inner, edit_inner_mask, edit_labels) = datapack
+                    lm_tokens, lm_mask, lm_labels = self.mask_padding(lm_tokens, lm_mask)
+                    loc_tokens, loc_mask, loc_labels = self.mask_padding(loc_tokens, loc_mask)
+                    edit_outer, edit_outer_mask = edit_inner, edit_inner_mask
+                elif self.config.task == 'cloze':
+                    (
+                        lm_tokens, lm_mask, lm_labels,
+                        loc_tokens, loc_mask, loc_labels,
+                        edit_outer, edit_outer_mask, edit_labels,
+                        edit_inner, edit_inner_mask, edit_labels,
+                    ) = datapack
+
+                    lm_tokens, lm_mask, lm_labels = self.mask_padding(lm_tokens, lm_mask, lm_labels)
+                    loc_tokens, loc_mask, loc_labels = self.mask_padding(loc_tokens, loc_mask, loc_labels)
+
+                for edit_example_idx in range(self.config.n_edits):
+                    edit_inner_tokens_, edit_inner_mask_, edit_labels_ = (
+                        self.strip_padding(edit_inner[edit_example_idx],
+                                            edit_inner_mask[edit_example_idx],
+                                            edit_labels[edit_example_idx])
+                    )
+
+                    edit_outer_tokens_, edit_outer_mask_, _ = (
+                        self.strip_padding(edit_outer[edit_example_idx],
+                                            edit_outer_mask[edit_example_idx],
+                                            edit_labels[edit_example_idx])
+                    )
+                    
+                    param_groups = [
+                        {'params': p, 'lr': None}
+                        for p in self.model.inner_params()
+                    ]
+                    inner_opt = (
+                        torch.optim.SGD(param_groups) if self.config.learnable_lr
+                        else torch.optim.SGD(
+                                self.model.inner_params(),
+                                lr=self.config.inner_lr
+                        )
+                    )
+
+                    with higher.innerloop_ctx(
+                            self.model,
+                            inner_opt,
+                            override={'lr': self.lrs} if self.config.learnable_lr else None,
+                            copy_initial_weights=False,
+                            track_higher_grads=True
+                    ) as (fmodel, diffopt):
+                        for edit_step in range(self.config.n_edit_steps):
+                            if self.config.split_params:
+                                fmodel.set_editing(True)
+                            loss = fmodel(
+                                edit_inner_tokens_,
+                                attention_mask=edit_inner_mask_,
+                                labels=edit_labels_
+                            ).loss
+                            if self.config.split_params:
+                                fmodel.set_editing(False)
+                            diffopt.step(loss)
+
+                        edit_out = fmodel(
+                            edit_outer_tokens_,
+                            attention_mask=edit_outer_mask_,
+                            labels=edit_labels_
+                        )
+                        l_edit = edit_out.loss
+
+                        edited_base_out = fmodel(
+                            loc_tokens[edit_example_idx].unsqueeze(0),
+                            attention_mask=loc_mask[edit_example_idx].unsqueeze(0),
+                            labels=loc_labels[edit_example_idx].unsqueeze(0)
+                        )
+
+                        with torch.no_grad():
+                            base_out = self.model(
+                                loc_tokens[edit_example_idx].unsqueeze(0),
+                                attention_mask=loc_mask[edit_example_idx].unsqueeze(0),
+                                labels=loc_labels[edit_example_idx].unsqueeze(0)
+                            )
+
+                        l_loc = (
+                            base_out.logits.softmax(-1).detach() * (
+                                base_out.logits.log_softmax(-1).detach() -
+                                edited_base_out.logits.log_softmax(-1)
+                            )
+                        ).sum(-1).mean()
+
+                        total_edit_loss = (
+                            self.config.cloc * l_loc  +
+                            self.config.cedit * l_edit
+                        ) / self.config.n_edits
+                        total_edit_loss.backward()
+
+                    # Only perform one edit
+                    break
+
+                # Compute quadratic loss
+                l_base = 0.0
+                for n, p in self.model.named_parameters():
+                    buffer_name = n.replace('.', '__')
+                    mean = getattr(self.model, f'{buffer_name}_mean')
+                    fisher = getattr(self.model, f'{buffer_name}_fisher')
+                    l_base += self.weight * 0.5 * (fisher * (p - mean) ** 2).sum()
+                l_base.backward()
+
+                global_iter += 1
+
+                info_dict = {
+                    "loss/base": l_base, "loss/edit": l_edit,
+                    "loss/loc": l_loc, "loss/train": total_edit_loss + l_base,
+                }
+
+                info_dict["grad/all"] = torch.nn.utils.clip_grad_norm_(self.model.parameters(), 50)
+                info_dict['grad/lrs'] = torch.nn.utils.clip_grad_norm_(self.lrs, 50).item()
+
+                for k, v in info_dict.items():
+                    info_dict_[k].append(v)
+                
+                # accumulate grads
+                if train_step % 5 == 0:
+                    means = {k: sum(v) / len(v) for (k,v) in info_dict_.items()}
+                    self.echo(train_step, **means)
+                    means.update({f"lr/lr{i}":lr.data.item() for i, lr in enumerate(self.lrs)})
+                    self.wandb_log(global_iter, means)
+                    info_dict_ = defaultdict(list)
+                    
+                    opt.step()
+                    opt.zero_grad()
+
+                    if self.config.learnable_lr:
+                        lr_opt.step()
+                        lr_opt.zero_grad()
+
+                if (train_step % self.config.val_interval == 0):
+                    self.validateSelfSampleTraining()
+                
+                self.saveState(self.model, global_iter, name=f"{self.model_name}_{self.config.task}_{self.config.ds}")
+                if self.config.learnable_lr:
+                    self.saveState(self.lrs, global_iter, name=f'lr_{self.model_name}')
+                if global_iter >= self.config.max_iter:
+                    print("Reached max iterations")
+                    break
+
+        self.saveState(self.model, global_iter, final=True, name=f"{self.model_name}_{self.config.task}_{self.config.ds}")
+        if self.config.learnable_lr:
+            self.saveState(self.lrs, global_iter, final=True, name=f'lr_{self.model_name}')
+
+
 if __name__ == "__main__":
     random.seed(123)
     np.random.seed(123)
@@ -713,6 +935,8 @@ if __name__ == "__main__":
     parser.add_argument('--n_edits', type=int, default=1)
     parser.add_argument('--split_params', action='store_true')
     parser.add_argument('--finetune', action='store_true')
+    parser.add_argument('--ewc', action='store_true')
+    parser.add_argument('--ewc_weight', type=float, default=1e-7)
     parser.add_argument('--gen', action='store_true')
     parser.add_argument('--lama', action='store_true')
     parser.add_argument('--kilt', action='store_true')
@@ -741,6 +965,7 @@ if __name__ == "__main__":
     config.write_loc = loc
     config.bs = args.bs
     config.n_edits = args.n_edits
+    config.ewc = args.ewc
     config.split_params = args.split_params
     config.debug = args.debug if args.debug else config.debug
     config.val_interval = args.val_interval
@@ -816,6 +1041,9 @@ if __name__ == "__main__":
 
     if args.finetune:
         trainer = BaseTrainer(config, dataloader)
+
+    elif args.ewc:
+        trainer = EWCTrainer(config, train, validation, args.ewc_weight, tokenizer)
 
     elif (args.gen or args.lama or args.kilt):
         trainer = SelfSampleTrainer(config, train, validation, tokenizer)
