@@ -208,11 +208,12 @@ def wrap_model(model, name, ortho=False):
     # find Conv1D layers to replace (they annoyingly have transposed weights)
     modules = None
     if name == 'gpt2':
+        d = 3072
         module_predicate = lambda mod: (
-            isinstance(mod, transformers.models.gpt2.modeling_gpt2.Conv1D) and mod.weight.shape[1] == 768
+            isinstance(mod, transformers.models.gpt2.modeling_gpt2.Conv1D) and mod.weight.shape[1] == d
         )
-        n_hidden = model.config.n_embd
-        modules = model.transformer.h[-6:]
+        n_hidden = d #model.config.n_embd
+        modules = None
     elif name == 'bart-base':
         module_predicate = lambda mod: (
             isinstance(mod, transformers.models.bart.modeling_bart.BartDecoderLayer) or
@@ -231,12 +232,13 @@ def wrap_model(model, name, ortho=False):
 
 def prep_for_maml(model, adapt_all: bool = False):
     # Default inner loop adaptation parameters
+    norm_pred = lambda n: 'ln' not in n and 'bn' not in n
     def _inner_params(self):
         if hasattr(self, 'transformer'): # gpt2
             if adapt_all:
-                return list(self.transformer.h.parameters())
+                return [p for (n,p) in self.transformer.h.named_parameters() if norm_pred(n)]
             else:
-                return list(self.transformer.h[-3:].parameters())
+                return [p for (n,p) in self.transformer.h[-3:].named_parameters() if norm_pred(n)]
         elif hasattr(self, 'model'): # bart
             return (list(self.model.encoder.layers[-3:].parameters()) + 
                     list(self.model.decoder.layers[-3:].parameters()))

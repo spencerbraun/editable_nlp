@@ -2,7 +2,7 @@ class TrainConfig:
     def __init__(self):
         self.task = 'finetune'
         self.outer_lr = 1e-5
-        self.epochs = 1
+        self.epochs = 3
         self.max_iter = 1.5e4
 
         self.debug = False
@@ -16,7 +16,7 @@ class EditConfig:
         self.task = 'editable'
         self.inner_lr = 1e-3
         self.outer_lr = 1e-5
-        self.epochs = 1
+        self.epochs = 3
         self.max_iter = 1.5e4
         self.n_edit_steps = 1
         self.cedit = 0.5
@@ -36,8 +36,8 @@ class SelfSampleGPT2Config:
         self.model_name = 'gpt2'
         self.inner_lr = 1e-2
         self.outer_lr = 1e-5
-        self.epochs = 1
-        self.max_iter = 20000
+        self.epochs = 3
+        self.max_iter = 40000
         self.n_edit_steps = 1
         self.cedit = 1
         self.cloc = 100
@@ -61,7 +61,7 @@ class ClozeT5Config:
 
         self.inner_lr = 1e-2
         self.outer_lr = 1e-5
-        self.epochs = 1
+        self.epochs = 3
         self.max_iter = 40000
         self.n_edit_steps = 1
         self.cedit = 5

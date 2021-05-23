@@ -424,7 +424,8 @@ def evalSelfSample(
     cloze=False,
     mmtm=False,
     delta=None,
-    lr_path=None
+    lr_path=None,
+    n_runs=5
     ):
 
     pad_token_id = getPadTokenID(model)
@@ -479,10 +480,12 @@ def evalSelfSample(
                 delta=(delta if mmtm else None)
             )
 
-            if (edit_number + 1) % 20 == 0:
+            if edit_number % 20 == 0:
                 new_ppl = perplexity(model_edited, dataloader, cloze=cloze, iteration=n_edits, pad_token_id=pad_token_id)
                 if cloze:
                     new_acc, new_lp = drawdown(model_edited, dataloader, iteration=n_edits, pad_token_id=pad_token_id)
+                else:
+                    new_acc, new_lp = "", ""
             else:
                 new_ppl = ""
                 new_acc, new_lp = "", ""
@@ -506,7 +509,7 @@ def evalSelfSample(
                 model_edited.load_state_dict(model.state_dict())
 
             n_edits +=1
-            if n_edits >= (5 * seq_edits):
+            if n_edits >= (n_runs * seq_edits):
                 break
         print(f"Saved results to {saveloc}")
     if copy_to:
@@ -654,6 +657,7 @@ if __name__ == "__main__":
     parser.add_argument('--mmtm', action='store_true')
     parser.add_argument('--delta', type=float, default=5.0e-3, help='Delta for MMTM')
     parser.add_argument('--copy_to')
+    parser.add_argument('--n_runs', type=int, default=5)
     args = parser.parse_args()
 
     loc = utils.sailPreprocess()
@@ -694,7 +698,8 @@ if __name__ == "__main__":
             copy_to=args.copy_to,
             cloze=False,
             mmtm=args.mmtm,
-            delta=args.delta
+            delta=args.delta,
+            n_runs=args.n_runs
             )
     elif args.lama:
         dataloader = MaskedLMDataloader(
@@ -721,7 +726,8 @@ if __name__ == "__main__":
             cloze=True,
             lr_path=args.lr_path,
             mmtm=args.mmtm,
-            delta=args.delta
+            delta=args.delta,
+            n_runs=args.n_runs
             )
     elif args.kilt:
         dataloader = MaskedLMDataloader(
@@ -745,7 +751,8 @@ if __name__ == "__main__":
             cloze=True,
             lr_path=args.lr_path,
             mmtm=args.mmtm,
-            delta=args.delta
+            delta=args.delta,
+            n_runs=args.n_runs
             )
 
     else:

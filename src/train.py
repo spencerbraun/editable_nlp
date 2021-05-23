@@ -59,6 +59,7 @@ class BaseTrainer:
                 config=self.config,
                 name=f"{self.model_name}{split}_{self.config.task}_{self.config.ds}_{self.timestamp}",
                 dir=self.config.write_loc,
+                notes=self.config.notes,
             )
             transformers.logging.set_verbosity_info()
 
@@ -507,7 +508,8 @@ class SelfSampleTrainer(EditTrainer):
 
         self.model.train()
         self.model.to(self.device)
-        opt = torch.optim.Adam(self.model.parameters(), self.config.outer_lr)
+        pg = [{'params': p, 'lr': self.config.outer_lr if hasattr(p, '__conditioner__') else self.config.outer_lr} for p in self.model.parameters()]
+        opt = torch.optim.Adam(pg)
 
         global_iter = 0
         print("Starting Training")
@@ -547,6 +549,10 @@ class SelfSampleTrainer(EditTrainer):
                     p_cache[n] = p.data.detach().clone()
 
                 for edit_example_idx in range(self.config.n_edits):
+                    if self.config.noise_coef is not None:
+                        for p in self.model.inner_params():
+                            p.data += torch.randn_like(p.data) * self.config.noise_coef
+                        
                     edit_inner_tokens_, edit_inner_mask_, edit_labels_ = (
                         self.strip_padding(edit_inner[edit_example_idx],
                                            edit_inner_mask[edit_example_idx],
@@ -725,6 +731,9 @@ if __name__ == "__main__":
     parser.add_argument('--cedit', type=float, default=None)
     parser.add_argument('--cloc', type=float, default=None)
     parser.add_argument('--model', type=str, default='bart-base')
+    parser.add_argument('--noise_coef', type=float, default=None)
+    parser.add_argument('--notes', type=str, default='')
+    parser.add_argument('--lr_lr', type=float, default=None)
     args = parser.parse_args()
 
     loc = utils.sailPreprocess()
@@ -746,13 +755,17 @@ if __name__ == "__main__":
     config.val_interval = args.val_interval
     config.ds = 'kilt' if args.kilt else 'lama' if args.lama else 'wikitext'
     config.ortho = args.ortho
-
+    config.noise_coef = args.noise_coef
+    config.notes = args.notes
     if args.outer_lr is not None:
         print(f"Overriding default outer_lr {config.outer_lr} with new value {args.outer_lr}")
         config.outer_lr = args.outer_lr
     if args.inner_lr is not None:
         print(f"Overriding default inner_lr {config.inner_lr} with new value {args.inner_lr}")
         config.inner_lr = args.inner_lr
+    if args.lr_lr is not None:
+        print(f"Overriding default lr_lr {config.lr_lr} with new value {args.lr_lr}")
+        config.lr_lr = args.lr_lr
     if args.cedit is not None:
         print(f"Overriding default cedit {config.cedit} with new value {args.cedit}")
         config.cedit = args.cedit
