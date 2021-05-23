@@ -150,18 +150,13 @@ def performEdits(
                 if split_params:
                     fmodel.set_editing(True)
 
+                loss = 0.0
                 edit_logits = fmodel(edit_inputs)
                 # Only edit those examples which the model is not predicting correctly
                 edit_mask = torch.argmax(edit_logits, -1) != edit_labels
-                edit_probs = edit_logits.softmax(1)
+                edit_probs = (edit_logits.softmax(1) + 1e-4).log() # smoothed log_softmax
                 correct_probs = edit_probs.gather(1, edit_labels.view(-1, 1)).squeeze(1)[edit_mask]
-                loss = 0.0  # In case all examples are predicted correctly
-                loss -= (torch.clamp(correct_probs, min=1e-10, max=1)).log().sum() / len(edit_labels)
-
-                '''
-                loss = 0.0  # In case all examples are predicted correctly
-                loss += F.cross_entropy(edit_logits[edit_mask], edit_labels[edit_mask])
-                '''
+                loss -= correct_probs.sum() / len(edit_labels)
 
                 if split_params:
                     fmodel.set_editing(False)
@@ -184,15 +179,12 @@ def performEdits(
                 lp = get_logprobs(fmodel, edit_inputs, edit_labels)
                 lp_hist.append(lp.exp())
 
+    l_edit = 0.0
     edit_logits = fmodel(edit_inputs)
     edit_mask = torch.argmax(edit_logits, -1) != edit_labels
-    edit_probs = edit_logits.softmax(1)
+    edit_probs = (edit_logits.softmax(1) + 1e-4).log() # smoothed log_softmax
     correct_probs = edit_probs.gather(1, edit_labels.view(-1, 1)).squeeze(1)[edit_mask]
-    l_edit = 0.0
-    l_edit -= (correct_probs + 1e-10).log().sum() / len(edit_labels)
-
-    # edit_mask = torch.argmax(edit_logits, -1) != edit_labels
-    # l_edit = F.cross_entropy(edit_logits[edit_mask], edit_labels[edit_mask])
+    l_edit -= correct_probs.sum() / len(edit_labels)
 
     edit_success = (torch.argmax(edit_logits, -1) == edit_labels).float().mean().item() * 100.0
     prob_change = (abs(lp_hist[-1]) - abs(lp_hist[0]))#  / (abs(lp_hist[0]) + eps))
