@@ -199,10 +199,14 @@ def performOneEdit(
         idxProbs = getClozeIndexedProbs
 
     logit_hist = []
-    logit_hist.append(
-        idxProbs(model, edit_locs, gold_tokens, edit_tokens,
-        None if task == 'gen' else edit_labels),
-    )
+    if task == 'gen':
+        logit_hist.append(
+            idxProbs(model, edit_locs, gold_tokens, edit_tokens, None)
+        )
+    elif task == 'cloze':
+        logit_hist.append(
+            idxProbs(model, edit_locs, gold_tokens, edit_outer, edit_labels)
+        )
 
     with higher.innerloop_ctx(
         model,
