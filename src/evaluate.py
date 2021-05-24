@@ -192,23 +192,25 @@ def performOneEdit(
     inner_opt = torch.optim.Adam(param_groups) if mode == "mmtm" else torch.optim.SGD(param_groups)
 
     if task == 'gen':
-        edit_inner, edit_inner_mask, edit_labels = edit_package
-        edit_outer, edit_outer_mask = edit_inner, edit_inner_mask
+        edit_tokens, edit_mask, edit_labels = edit_package
         idxProbs = getIndexedProbs
     elif task == 'cloze':
         (
-            edit_outer, edit_outer_mask, _,
+            edit_outer, edit_outer_mask, edit_labels,
             edit_inner, edit_inner_mask, edit_labels,
-            ) = edit_package
+        ) = edit_package
 
         idxProbs = getClozeIndexedProbs
 
     logit_hist = []
-
-    logit_hist.append(
-        idxProbs(model, edit_locs, gold_tokens, edit_outer,
-        None if task == 'gen' else edit_labels),
-    )
+    if task == 'gen':
+        logit_hist.append(
+            idxProbs(model, edit_locs, gold_tokens, edit_tokens, None)
+        )
+    elif task == 'cloze':
+        logit_hist.append(
+            idxProbs(model, edit_locs, gold_tokens, edit_outer, edit_labels)
+        )
 
     with higher.innerloop_ctx(
         model,
@@ -222,11 +224,20 @@ def performOneEdit(
 
             if hasattr(fmodel, "set_editing"):
                 fmodel.set_editing(True)
-            output = fmodel(
-                edit_inner,
-                attention_mask=edit_inner_mask,
-                labels=edit_labels
-            )
+
+            if task == 'gen':
+                output = fmodel(
+                    edit_tokens,
+                    attention_mask=edit_mask,
+                    labels=edit_labels
+                )
+            elif task == 'cloze':
+                output = fmodel(
+                    edit_inner,
+                    attention_mask=edit_inner_mask,
+                    labels=edit_labels
+                )
+
             if hasattr(fmodel, "set_editing"):
                 fmodel.set_editing(False)
             diffopt.step(output.loss)
@@ -242,10 +253,14 @@ def performOneEdit(
                         )
                     )
 
-            logit_hist.append(
-                idxProbs(fmodel, edit_locs, gold_tokens, edit_outer,
-                None if task == 'gen' else edit_labels),
-            )
+            if task == 'gen':
+                logit_hist.append(
+                    idxProbs(fmodel, edit_locs, gold_tokens, edit_tokens, None),
+                )
+            elif task == 'cloze':
+                logit_hist.append(
+                    idxProbs(fmodel, edit_locs, gold_tokens, edit_outer, edit_labels),
+                )
 
         ll_change = (abs(logit_hist[0][0]) - abs(logit_hist[-1][0]))/abs(logit_hist[0][0])
         prob_change = logit_hist[-1][0].exp() - logit_hist[0][0].exp()
