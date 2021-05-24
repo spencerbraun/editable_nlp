@@ -142,4 +142,5 @@ runs/
 models/
 eval/
 outputs/
+scripts/
 

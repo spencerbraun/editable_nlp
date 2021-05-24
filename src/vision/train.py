@@ -66,7 +66,7 @@ class BaseTrainer:
                 task = f'senn{self.config.n_edits}' if self.config.split_params else 'enn'
             run_name = f"{task}_{self.config.dataset}_{self.timestamp}"
 
-            self.writer = SummaryWriter(log_dir=os.path.join(self.config.loc, 'runs'))
+            self.writer = SummaryWriter(log_dir=os.path.join(self.config.loc, 'runs', run_name))
             self.writer.add_hparams(hparam_dict=dict(self.config), metric_dict=dict(), run_name=run_name)
 
 
