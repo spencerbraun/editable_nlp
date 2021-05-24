@@ -17,7 +17,7 @@ from torchvision.models import resnet18, densenet169
 from omegaconf import DictConfig, OmegaConf, open_dict
 import hydra
 
-import wandb
+from torch.utils.tensorboard import SummaryWriter
 import vision.utils as utils
 from vision.data_process import loadCIFAR, loadImageNet
 from vision.evaluate import accuracy, editGenerator, performEdits
@@ -41,9 +41,9 @@ class BaseTrainer:
         load_model = densenet169 if config.model == 'densenet169' else resnet18
         self.model = utils.loadOTSModel(load_model, num_classes, self.config.pretrained, layernorm=self.config.layernorm)
         if not self.config.pretrained and self.config.model_path:
-            model_path = os.path.join(self.config.loc, self.config.model_path)
-            self.model.load_state_dict(torch.load(model_path))
-            print(f"Loaded model weights from {model_path}")
+            self.config.model_path = os.path.join(self.config.loc, self.config.model_path)
+            self.model.load_state_dict(torch.load(self.config.model_path))
+            print(f"Loaded model weights from {self.config.model_path}")
         self.original_model = copy.deepcopy(self.model)
 
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -61,13 +61,14 @@ class BaseTrainer:
         self.configure_data(train_set, val_set)
 
         if not self.config.debug:
-            wandb.init(
-                project='patchable-cnn',
-                entity='patchable-lm',
-                config=self.config,
-                name=f"{self.config.dataset}/{self.config.model}/{self.config.task}_{self.timestamp}",
-                dir=self.config.loc,
-            )
+            task = self.config.task
+            if task == 'editable':
+                task = f'senn{self.config.n_edits}' if self.config.split_params else 'enn'
+            run_name = f"{task}_{self.config.dataset}_{self.timestamp}"
+
+            self.writer = SummaryWriter(log_dir=os.path.join(self.config.loc, 'runs'))
+            self.writer.add_hparams(hparam_dict=dict(self.config), metric_dict=dict(), run_name=run_name)
+
 
     def saveState(self, state_obj, train_step, name="finetune", final=False):
         if not self.config.debug:
@@ -89,7 +90,12 @@ class BaseTrainer:
                 f"Epoch: {self.epoch}; TrainStep {train_step}; ",
                 "; ".join([f"{key} {val}" for key,val in kwargs.items()])
             ))
-    
+
+    def tensorBoard(self, step, **kwargs):
+        if not self.config.debug:
+            for key, value in kwargs.items():
+                self.writer.add_scalar(key, value, step)
+
     def verbose_echo(self, message):
         if not self.config.silent and self.config.verbose:
             print(message)
@@ -136,13 +142,13 @@ class BaseTrainer:
                 self.global_iter, loss, acc1, acc5))
 
         if not self.config.debug:
-            wandb.log({
-                'step': self.global_iter,
+            self.tensorBoard(self.global_iter, **{
                 'loss/train': loss,
                 'acc/top1_train': acc1,
                 'acc/top5_train': acc5,
             })
-        
+            self.writer.flush()
+
         return loss.item(), acc1, acc5
 
     def val_step(self):
@@ -168,18 +174,27 @@ class BaseTrainer:
         print('Epoch {} Validation\tLoss: {:.2f}\tTop-1 acc: {:.2f}\tTop-5 acc: {:.2f}'.format(
                 self.epoch, loss, acc1, acc5))
         if not self.config.debug:
-            wandb.log({
-                'step': self.global_iter,
+            self.tensorBoard(self.global_iter, **{
                 'loss/val_avg': loss,
                 'acc/top1_val_avg': acc1,
                 'acc/top5_val_avg': acc5,
             })
-        
+            self.writer.flush()
+
         return loss.item(), acc1, acc5
 
     def run(self):
         if not self.config.debug:
             torch.save(self.config, self.hyperspath)
+            self.writer.add_custom_scalars({
+                'Accuracy': {
+                    'top1': ['Multiline', ['acc/top1_train', 'acc/top1_val']],
+                    'top5': ['Multiline', ['acc/top5_train', 'acc/top5_val']]
+                },
+                'Loss': {
+                    'total': ['Multiline', ['loss/train', 'loss/val']]
+                }
+            })
 
         self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config.outer_lr)
         self.scheduler = None
@@ -222,17 +237,18 @@ class BaseTrainer:
                 self.epoch, losses.avg, top1.avg, top5.avg))
 
             if not self.config.debug:
-                wandb.log({
-                    'step': self.global_iter,
+                self.tensorBoard(self.global_iter, **{
                     'loss/train_avg': losses.avg,
                     'acc/top1_train_avg': top1.avg,
                     'acc/top5_train_avg': top5.avg,
                 })
+                self.writer.flush()
 
             if self.scheduler:
                 self.scheduler.step()
 
         self.saveState(self.model, self.global_iter, final=True)
+        self.writer.close()
 
 
 class EditTrainer(BaseTrainer):
@@ -357,7 +373,6 @@ class EditTrainer(BaseTrainer):
         total_loss = (l_base + self.config.cloc * sum_l_loc + self.config.cedit * sum_l_edit).item()
 
         info_dict = {
-            'step': self.global_iter,
             'loss/base': l_base.item(),
             'loss/edit': sum_l_edit,
             'loss/loc': sum_l_loc,
@@ -387,7 +402,8 @@ class EditTrainer(BaseTrainer):
                 self.global_iter, total_loss, edit_success, acc1_pre, acc1_post, acc5_pre, acc5_post))
 
         if not self.config.debug:
-            wandb.log(info_dict)
+            self.tensorBoard(self.global_iter, **info_dict)
+            self.writer.flush()
 
         self.opt.step()
         if self.config.learnable_lr:
@@ -491,8 +507,7 @@ class EditTrainer(BaseTrainer):
                 self.epoch, np.mean(losses), np.mean(edit_successes), np.mean(top1_pre),
                 np.mean(top1_post), np.mean(top5_pre), np.mean(top5_post)))
         if not self.config.debug:
-            wandb.log({
-                'step': self.global_iter,
+            self.tensorBoard(self.global_iter, **{
                 'loss/val': np.mean(losses),
                 'edit_success_val': np.mean(edit_successes),
                 'acc/top1_pre_val': np.mean(top1_pre),
@@ -500,10 +515,28 @@ class EditTrainer(BaseTrainer):
                 'acc/top5_pre_val': np.mean(top5_pre),
                 'acc/top5_post_val': np.mean(top5_post),
             })
+            self.writer.flush()
 
     def run(self):
         if not self.config.debug:
             torch.save(self.config, self.hyperspath)
+            self.writer.add_custom_scalars({
+                'Accuracy': {
+                    'top1_train': ['Multiline', ['acc/top1_pre_train', 'acc/top1_post_train']],
+                    'top1_val': ['Multiline', ['acc/top1_pre_val', 'acc/top1_post_val']],
+                    'top5_train': ['Multiline', ['acc/top5_pre_train', 'acc/top5_post_train']],
+                    'top5_val': ['Multiline', ['acc/top5_pre_val', 'acc/top5_post_val']],
+                },
+                'Loss': {
+                    'total': ['Multiline', ['loss/train', 'loss/val']],
+                    'base': ['Multiline', ['loss/base']],
+                    'edit': ['Multiline', ['loss/edit']],
+                    'loc': ['Multiline', ['loss/loc']]
+                },
+                'Edit success': {
+                    'success': ['Multiline', ['edit_success_train', 'edit_success_val']]
+                }
+            })
 
         if self.config.weight_decay:
             if self.config.split_params:
@@ -583,14 +616,14 @@ class EditTrainer(BaseTrainer):
                 self.epoch, losses.avg, top1.avg, top5.avg))
 
             if not self.config.debug:
-                wandb.log({
-                    'step': self.global_iter,
-                    'loss/train_avg': losses.avg,
-                    'acc/top1_train_avg': top1.avg,
-                    'acc/top5_train_avg': top5.avg,
+                self.tensorBoard(self.global_iter, **{
+                    # 'loss/train_avg': losses.avg,
+                    # 'acc/top1_train_avg': top1.avg,
+                    # 'acc/top5_train_avg': top5.avg,
                     'lr': self.opt.param_groups[0]['lr'],
                     'lr_lr': self.lr_opt.param_groups[0]['lr']
                 })
+                self.writer.flush()
 
             if self.scheduler:
                 self.scheduler.step()
@@ -601,6 +634,7 @@ class EditTrainer(BaseTrainer):
         self.saveState(self.model, self.global_iter, final=True)
         if self.config.learnable_lr:
             self.saveState(self.lrs, self.global_iter, final=True, name='lr')
+        self.writer.close()
 
 
 @hydra.main(config_path='config', config_name='config')
