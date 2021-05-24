@@ -26,7 +26,7 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
 class BaseTrainer:
-    def __init__(self, config, dataloader, model_path=None):
+    def __init__(self, config, train, validation, model_path=None):
 
         #configs
         self.config = config
@@ -51,7 +51,8 @@ class BaseTrainer:
             f"{self.model_dir}/{model}{ewc}{split}_epoch{epoch}_ts{step}.{self.timestamp}"
             )
 
-        self.data = dataloader
+        self.data = train
+        self.validation_set = validation
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         if not self.config.debug:
             run_name = f'{self.model_name}{ewc}{split}_{self.config.task}_{self.config.ds}_{self.timestamp}'
@@ -93,6 +94,78 @@ class BaseTrainer:
         if not self.config.debug:
             wandb.log(row)
 
+    def mask_padding(self, tokens, mask, label=None):
+        if self.config.task == 'gen':
+            return tokens.to(self.device), mask.to(self.device), tokens.masked_fill(mask == 0, -100).to(self.device)
+        elif self.config.task == 'cloze':
+            return (tokens.to(self.device), mask.to(self.device),
+            label.masked_fill(label == self.tokenizer.pad_token_id, -100).to(self.device))
+
+    def strip_padding(self, tokens, mask, labels):
+        mask_ = tokens != self.tokenizer.pad_token_id
+        tokens = tokens[mask_].unsqueeze(0)
+        mask = mask[mask_].unsqueeze(0)
+        if mask_.shape == labels.shape:
+            labels = labels[mask_].unsqueeze(0)
+        else:
+            label_mask = labels != self.tokenizer.pad_token_id
+            labels = labels[label_mask].unsqueeze(0)
+
+        return tokens.to(self.device), mask.to(self.device), labels.to(self.device)
+
+    def get_edit_locs(self, tokens, labels):
+        n_targets = (labels != -100).sum()
+        edit_locs = torch.tensor([tokens.shape[-1] - n_targets - 1 + i for i in range(n_targets)]).to(self.device)
+        gold_tokens = tokens[:,edit_locs]
+
+        return edit_locs, gold_tokens.cpu()
+
+    def validateBaseTraining(self):
+        iters = 0
+        loss = 0.0
+        accuracy = 0.0
+
+        with torch.no_grad():
+            for train_step, datapack in enumerate(self.validation_set):
+                if train_step >= 20:
+                    break
+
+                self.model.eval()
+                if self.config.task == 'cloze':
+                    (
+                        lm_tokens, lm_mask, lm_labels,
+                        _, _, _,
+                        _, _, _,
+                        _, _, _,
+                    ) = datapack
+
+                else:
+                    lm_tokens, lm_mask = datapack
+                    lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
+                    lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
+                
+                lm_tokens_, lm_mask_, lm_labels_ = self.strip_padding(
+                    lm_tokens[0], lm_mask[0], lm_labels[0]
+                )
+
+                base_out = self.model(
+                    lm_tokens_,
+                    attention_mask=lm_mask_,
+                    labels=lm_labels_
+                )
+
+                loss += base_out.loss
+                output_lps = F.log_softmax(base_out.logits, dim=-1)
+                accuracy += (output_lps.argmax(-1) == lm_labels_).all(-1).float().mean().cpu()
+                iters += 1
+
+        loss /= iters
+        accuracy /= iters
+        self.echo(self.global_iter, **{'loss/val': loss, 'accuracy/val': accuracy})
+        self.tensorBoard(self.global_iter, **{'loss/val': loss, 'accuracy/val': accuracy})
+
+        self.model.train()
+
     def run(self):
 
         if not self.config.debug:
@@ -103,19 +176,28 @@ class BaseTrainer:
         opt = torch.optim.Adam(
             self.model.parameters(),
             self.config.outer_lr
-            )
+        )
 
-        global_iter = 0
+        self.global_iter = 0
         print("Starting Fine-tuning")
 
         for epoch in range(self.config.epochs):
             self.epoch = epoch
 
-            for train_step, lm_data in enumerate(self.data):
+            for train_step, datapack in enumerate(self.data):
+                if self.config.task == 'cloze':
+                    (
+                        lm_tokens, lm_mask, lm_labels,
+                        _, _, _,
+                        _, _, _,
+                        _, _, _,
+                    ) = datapack
+                    lm_tokens, lm_mask, lm_labels = self.mask_padding(lm_tokens, lm_mask, lm_labels)
 
-                lm_tokens, lm_mask = lm_data
-                lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
-                lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
+                else:
+                    lm_tokens, lm_mask = datapack
+                    lm_tokens, lm_mask = lm_tokens.to(self.device), lm_mask.to(self.device)
+                    lm_labels = lm_tokens.masked_fill(lm_mask == 0, -100)
 
                 base_out = self.model(
                     lm_tokens,
@@ -129,9 +211,12 @@ class BaseTrainer:
                     opt.step()
                     opt.zero_grad()
 
-                global_iter += 1
+                if (train_step % self.config.val_interval == 0):
+                    self.validateBaseTraining()
+
+                self.global_iter += 1
                 self.echo(train_step, **{"loss/base": l_base})
-                self.tensorBoard(global_iter, **{"loss/base": l_base})
+                self.tensorBoard(self.global_iter, **{"loss/base": l_base})
                 self.saveState(self.model, train_step, "gpt2")
 
         self.saveState(self.model, train_step)
@@ -142,8 +227,7 @@ class BaseTrainer:
 
 class EditTrainer(BaseTrainer):
     def __init__(self, config, train, validation, model_path=None):
-        super().__init__(config, train, model_path=None)
-        self.validation_set = validation
+        super().__init__(config, train, validation, model_path=None)
         self.val_iter = 0
 
         self.model = utils.loadTrainedModel(
@@ -344,8 +428,6 @@ class SelfSampleTrainer(EditTrainer):
     def __init__(self, config, train, validation, model_path=None):
         super().__init__(config, train, validation, model_path)
 
-        self.validation_set = validation
-
         if self.config.split_params:
             utils.wrap_model(self.model, self.model_name, self.config.ortho)
 
@@ -391,32 +473,6 @@ class SelfSampleTrainer(EditTrainer):
 
         avg_nll, ppl = acc.get_metrics()
         return torch.tensor(ppl)
-
-    def mask_padding(self, tokens, mask, label=None):
-        if self.config.task == 'gen':
-            return tokens.to(self.device), mask.to(self.device), tokens.masked_fill(mask == 0, -100).to(self.device)
-        elif self.config.task == 'cloze':
-            return (tokens.to(self.device), mask.to(self.device),
-            label.masked_fill(label == self.tokenizer.pad_token_id, -100).to(self.device))
-
-    def strip_padding(self, tokens, mask, labels):
-        mask_ = tokens != self.tokenizer.pad_token_id
-        tokens = tokens[mask_].unsqueeze(0)
-        mask = mask[mask_].unsqueeze(0)
-        if mask_.shape == labels.shape:
-            labels = labels[mask_].unsqueeze(0)
-        else:
-            label_mask = labels != self.tokenizer.pad_token_id
-            labels = labels[label_mask].unsqueeze(0)
-
-        return tokens.to(self.device), mask.to(self.device), labels.to(self.device)
-
-    def get_edit_locs(self, tokens, labels):
-        n_targets = (labels != -100).sum()
-        edit_locs = torch.tensor([tokens.shape[-1] - n_targets - 1 + i for i in range(n_targets)]).to(self.device)
-        gold_tokens = tokens[:,edit_locs]
-
-        return edit_locs, gold_tokens.cpu()
 
     def validateSelfSampleTraining(self):
         self.model.eval()
@@ -501,17 +557,6 @@ class SelfSampleTrainer(EditTrainer):
     def run(self):
         if not self.config.debug:
             torch.save(self.config, self.hyperspath)
-            self.writer.add_custom_scalars({
-                'Edit success metrics': {
-                    'Accuracy': ['Multiline', ['accuracy/train', 'accuracy/val']],
-                    'll change': ['Multiline', ['ll_change/train', 'll_change/val']],
-                    'Training perplexity': ['Multiline', ['ppl_pre/train', 'ppl_post/train']],
-                    'Validation perplexity': ['Multiline', ['ppl_pre/val', 'ppl_post/val']],
-                },
-                'Loss': {
-                    'Eval': ['Multiline', ['eval_loss/train', 'eval_loss/val']]
-                }
-            })
 
         self.model.train()
         self.model.to(self.device)
@@ -566,7 +611,7 @@ class SelfSampleTrainer(EditTrainer):
                                            edit_outer_mask[edit_example_idx],
                                            edit_labels[edit_example_idx])
                     )
-                    
+
                     param_groups = [
                         {'params': p, 'lr': None}
                         for p in self.model.inner_params()
@@ -979,9 +1024,9 @@ if __name__ == "__main__":
         cache_dir=loc)
 
     config = (
-        TrainConfig() if args.finetune else
         SelfSampleGPT2Config() if args.gen else
         ClozeBartConfig() if args.model == 'bart-base' else
+        TrainConfig() if args.finetune else
         ClozeT5Config()
     )
     config.write_loc = loc
@@ -1033,7 +1078,7 @@ if __name__ == "__main__":
             pct=40,
             shuffle=True,
             mode='editable',
-            inner_loop=config.inner_loop,
+            inner_loop=getattr(config, 'inner_loop', 'template'),
             n_edits=args.n_edits
         )
         train = dataloader.train
@@ -1062,7 +1107,7 @@ if __name__ == "__main__":
         )
 
     if args.finetune:
-        trainer = BaseTrainer(config, dataloader)
+        trainer = BaseTrainer(config, train, validation)
 
     elif args.ewc:
         trainer = EWCTrainer(config, train, validation, args.ewc_weight, tokenizer)

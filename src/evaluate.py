@@ -196,7 +196,7 @@ def performOneEdit(
         idxProbs = getIndexedProbs
     elif task == 'cloze':
         (
-            edit_outer, edit_outer_mask, _,
+            edit_outer, edit_outer_mask, edit_labels,
             edit_inner, edit_inner_mask, edit_labels,
             ) = edit_package
 
@@ -209,7 +209,7 @@ def performOneEdit(
         )
     elif task == 'cloze':
         logit_hist.append(
-            idxProbs(model, edit_locs, gold_tokens, edit_inner, edit_labels)
+            idxProbs(model, edit_locs, gold_tokens, edit_outer, edit_labels)
         )
 
     with higher.innerloop_ctx(
@@ -259,7 +259,7 @@ def performOneEdit(
                 )
             elif task == 'cloze':
                 logit_hist.append(
-                    idxProbs(fmodel, edit_locs, gold_tokens, edit_inner, edit_labels),
+                    idxProbs(fmodel, edit_locs, gold_tokens, edit_outer, edit_labels),
                 )
 
         ll_change = (abs(logit_hist[0][0]) - abs(logit_hist[-1][0]))/abs(logit_hist[0][0])
