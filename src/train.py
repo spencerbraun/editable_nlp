@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import torch.autograd as A
 import transformers
 import higher
-import wandb
+from torch.utils.tensorboard import SummaryWriter
 
 from torch.utils.data import Subset
 
@@ -54,13 +54,9 @@ class BaseTrainer:
         self.data = dataloader
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         if not self.config.debug:
-            wandb.init(
-                project='patchable' if self.config.task == 'gen' else 'patchable_masked',
-                entity='patchable-lm',
-                config=self.config,
-                name=f"{self.model_name}{ewc}{split}_{self.config.task}_{self.config.ds}_{self.timestamp}",
-                dir=self.config.write_loc,
-            )
+            run_name = f'{self.model_name}{ewc}{split}_{self.config.task}_{self.config.ds}_{self.timestamp}'
+            self.writer = SummaryWriter(log_dir=os.path.join(self.config.write_loc, 'runs', run_name))
+            self.writer.add_hparams(hparam_dict=self.config.__dict__, metric_dict=dict(), run_name=run_name)
             transformers.logging.set_verbosity_info()
 
         self.epoch = 0
@@ -134,8 +130,9 @@ class BaseTrainer:
 
                 global_iter += 1
                 self.echo(train_step, **{"loss/base": l_base})
-                self.wandb_log(global_iter, {"loss/base": l_base})
+                self.tensorBoard(global_iter, **{"loss/base": l_base})
                 self.saveState(self.model, train_step, "gpt2")
+                self.writer.flush()
 
 
         self.saveState(self.model, train_step)
@@ -326,13 +323,14 @@ class EditTrainer(BaseTrainer):
                     "loss/loc": l_loc, "loss/total": total_loss
                     }
                 self.echo(train_step, **loss_dict)
-                self.wandb_log(global_iter, loss_dict)
+                self.tensorBoard(global_iter, **loss_dict)
                 self.saveState(self.model, global_iter, name='editable')
                 if self.config.learnable_lr:
                     self.saveState(lr_opt, global_iter, name='lr')
                 if global_iter >= self.config.max_iter:
                     print("Reached max iterations")
                     break
+                self.writer.flush()
 
             # if (train_step % 1000 == 0) & (not self.config.debug):
             #     self.validateEditTraining()
@@ -495,16 +493,28 @@ class SelfSampleTrainer(EditTrainer):
                 f'eval_loss/{ds}': np.mean(loss_hist),
             }
             if not self.config.debug:
-                self.wandb_log(self.val_iter * self.config.val_interval, metrics)
+                self.tensorBoard(self.val_iter * self.config.val_interval, **metrics)
+                self.writer.flush()
 
         self.val_iter += 1
 
         self.model.train()
 
     def run(self):
-
         if not self.config.debug:
             torch.save(self.config, self.hyperspath)
+            self.writer.add_custom_scalars({
+                'Edit success metrics': {
+                    'Accuracy': ['Multiline', ['accuracy/train', 'accuracy/val']],
+                    'll change': ['Multiline', ['ll_change/train', 'll_change/val']],
+                    'Training perplexity': ['Multiline', ['ppl_pre/train', 'ppl_post/train']],
+                    'Validation perplexity': ['Multiline', ['ppl_pre/val', 'ppl_post/val']],
+                },
+                'Loss': {
+                    'Total': ['Multiline', ['loss/train', 'loss/val']],
+                    'Eval': ['Multiline', ['eval_loss/train', 'eval_loss/val']]
+                }
+            })
 
         self.model.train()
         self.model.to(self.device)
@@ -677,7 +687,7 @@ class SelfSampleTrainer(EditTrainer):
                     means = {k: sum(v) / len(v) for (k,v) in info_dict_.items()}
                     self.echo(train_step, **means)
                     means.update({f"lr/lr{i}":lr.data.item() for i, lr in enumerate(self.lrs)})
-                    self.wandb_log(global_iter, means)
+                    self.tensorBoard(global_iter, **means)
                     info_dict_ = defaultdict(list)
                     
                     opt.step()
@@ -686,6 +696,8 @@ class SelfSampleTrainer(EditTrainer):
                     if self.config.learnable_lr:
                         lr_opt.step()
                         lr_opt.zero_grad()
+
+                    self.writer.flush()
 
                 if (train_step % self.config.val_interval == 0):
                     self.validateSelfSampleTraining()
@@ -755,6 +767,18 @@ class EWCTrainer(SelfSampleTrainer):
     def run(self):
         if not self.config.debug:
             torch.save(self.config, self.hyperspath)
+            self.writer.add_custom_scalars({
+                'Edit success metrics': {
+                    'Accuracy': ['Multiline', ['accuracy/train', 'accuracy/val']],
+                    'll change': ['Multiline', ['ll_change/train', 'll_change/val']],
+                    'Training perplexity': ['Multiline', ['ppl_pre/train', 'ppl_post/train']],
+                    'Validation perplexity': ['Multiline', ['ppl_pre/val', 'ppl_post/val']],
+                },
+                'Loss': {
+                    'Total': ['Multiline', ['loss/train', 'loss/val']],
+                    'Eval': ['Multiline', ['eval_loss/train', 'eval_loss/val']]
+                }
+            })
 
         self.model.train()
         self.model.to(self.device)
@@ -898,7 +922,7 @@ class EWCTrainer(SelfSampleTrainer):
                     means = {k: sum(v) / len(v) for (k,v) in info_dict_.items()}
                     self.echo(train_step, **means)
                     means.update({f"lr/lr{i}":lr.data.item() for i, lr in enumerate(self.lrs)})
-                    self.wandb_log(global_iter, means)
+                    self.tensorBoard(global_iter, **means)
                     info_dict_ = defaultdict(list)
                     
                     opt.step()
@@ -907,6 +931,8 @@ class EWCTrainer(SelfSampleTrainer):
                     if self.config.learnable_lr:
                         lr_opt.step()
                         lr_opt.zero_grad()
+
+                    self.writer.flush()
 
                 if (train_step % self.config.val_interval == 0):
                     self.validateSelfSampleTraining()
