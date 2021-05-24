@@ -129,7 +129,11 @@ def getClozeIndexedProbs(model, index, gold_tokens, sent_tokens, labels, silent=
         if not silent:
             global TOKENIZER
             if TOKENIZER is None:
-                TOKENIZER = utils.loadTokenizer(name='bart-base', cache_dir='/juice/scr/spencerb/results/')
+                # TODO This is disgusting lol
+                try:
+                    TOKENIZER = utils.loadTokenizer(name='bart-base', cache_dir='/juice/scr/spencerb/results/')
+                except:
+                    TOKENIZER = utils.loadTokenizer(name='bart-base', cache_dir=f'/iris/u/{os.environ["USER"]}/code/editable_nlp/')
             print('*'*50)
             print(f"GOLD: {TOKENIZER.batch_decode(labels)}")
             print(f"GUESS: {TOKENIZER.batch_decode(output_lps.argmax(-1))}")
@@ -205,7 +209,7 @@ def performOneEdit(
         )
     elif task == 'cloze':
         logit_hist.append(
-            idxProbs(model, edit_locs, gold_tokens, edit_outer, edit_labels)
+            idxProbs(model, edit_locs, gold_tokens, edit_inner, edit_labels)
         )
 
     with higher.innerloop_ctx(
@@ -220,11 +224,20 @@ def performOneEdit(
 
             if hasattr(fmodel, "set_editing"):
                 fmodel.set_editing(True)
-            output = fmodel(
-                edit_tokens,
-                attention_mask=edit_mask,
-                labels=edit_labels
-            )
+
+            if task == 'gen':
+                output = fmodel(
+                    edit_tokens,
+                    attention_mask=edit_mask,
+                    labels=edit_labels
+                )
+            elif task == 'cloze':
+                output = fmodel(
+                    edit_inner,
+                    attention_mask=edit_inner_mask,
+                    labels=edit_labels
+                )
+
             if hasattr(fmodel, "set_editing"):
                 fmodel.set_editing(False)
             diffopt.step(output.loss)
@@ -240,10 +253,14 @@ def performOneEdit(
                         )
                     )
 
-            logit_hist.append(
-                idxProbs(fmodel, edit_locs, gold_tokens, edit_tokens,
-                None if task == 'gen' else edit_labels),
-            )
+            if task == 'gen':
+                logit_hist.append(
+                    idxProbs(fmodel, edit_locs, gold_tokens, edit_tokens, None),
+                )
+            elif task == 'cloze':
+                logit_hist.append(
+                    idxProbs(fmodel, edit_locs, gold_tokens, edit_inner, edit_labels),
+                )
 
         ll_change = (abs(logit_hist[0][0]) - abs(logit_hist[-1][0]))/abs(logit_hist[0][0])
         prob_change = logit_hist[-1][0].exp() - logit_hist[0][0].exp()

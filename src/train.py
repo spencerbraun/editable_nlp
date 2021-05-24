@@ -86,6 +86,7 @@ class BaseTrainer:
         if not self.config.debug:
             for key, value in kwargs.items():
                 self.writer.add_scalar(key, value, step)
+            self.writer.flush()
 
     def wandb_log(self, step, row):
         row['step'] = step
@@ -132,10 +133,10 @@ class BaseTrainer:
                 self.echo(train_step, **{"loss/base": l_base})
                 self.tensorBoard(global_iter, **{"loss/base": l_base})
                 self.saveState(self.model, train_step, "gpt2")
-                self.writer.flush()
-
 
         self.saveState(self.model, train_step)
+        if not self.config.debug:
+            self.writer.flush()
 
 
 
@@ -330,7 +331,6 @@ class EditTrainer(BaseTrainer):
                 if global_iter >= self.config.max_iter:
                     print("Reached max iterations")
                     break
-                self.writer.flush()
 
             # if (train_step % 1000 == 0) & (not self.config.debug):
             #     self.validateEditTraining()
@@ -492,9 +492,7 @@ class SelfSampleTrainer(EditTrainer):
                 f'accuracy/{ds}': np.mean(accuracy_hist),
                 f'eval_loss/{ds}': np.mean(loss_hist),
             }
-            if not self.config.debug:
-                self.tensorBoard(self.val_iter * self.config.val_interval, **metrics)
-                self.writer.flush()
+            self.tensorBoard(self.val_iter * self.config.val_interval, **metrics)
 
         self.val_iter += 1
 
@@ -511,7 +509,6 @@ class SelfSampleTrainer(EditTrainer):
                     'Validation perplexity': ['Multiline', ['ppl_pre/val', 'ppl_post/val']],
                 },
                 'Loss': {
-                    'Total': ['Multiline', ['loss/train', 'loss/val']],
                     'Eval': ['Multiline', ['eval_loss/train', 'eval_loss/val']]
                 }
             })
@@ -697,8 +694,6 @@ class SelfSampleTrainer(EditTrainer):
                         lr_opt.step()
                         lr_opt.zero_grad()
 
-                    self.writer.flush()
-
                 if (train_step % self.config.val_interval == 0):
                     self.validateSelfSampleTraining()
                 
@@ -710,6 +705,8 @@ class SelfSampleTrainer(EditTrainer):
                     break
 
         self.saveState(self.model, global_iter, final=True, name=f"{self.model_name}_{self.config.task}_{self.config.ds}")
+        if not self.config.debug:
+            self.writer.flush()
         if self.config.learnable_lr:
             self.saveState(self.lrs, global_iter, final=True, name=f'lr_{self.model_name}')
 
@@ -728,7 +725,7 @@ class EWCTrainer(SelfSampleTrainer):
             buffer_name = n.replace('.', '__')
             self.model.register_buffer(buffer_name + '_mean', p.data.clone())
 
-    def _update_fisher(self, dataloader, n_batches=10000):
+    def _update_fisher(self, dataloader, n_batches=1000):
         print("Estimating parameter Fisher matrices")
         grads = [None] * len(list(self.model.parameters()))  # Store the sum of gradients of log likelihoods
         n_samples = 0
@@ -775,7 +772,6 @@ class EWCTrainer(SelfSampleTrainer):
                     'Validation perplexity': ['Multiline', ['ppl_pre/val', 'ppl_post/val']],
                 },
                 'Loss': {
-                    'Total': ['Multiline', ['loss/train', 'loss/val']],
                     'Eval': ['Multiline', ['eval_loss/train', 'eval_loss/val']]
                 }
             })
@@ -932,8 +928,6 @@ class EWCTrainer(SelfSampleTrainer):
                         lr_opt.step()
                         lr_opt.zero_grad()
 
-                    self.writer.flush()
-
                 if (train_step % self.config.val_interval == 0):
                     self.validateSelfSampleTraining()
                 
@@ -945,6 +939,8 @@ class EWCTrainer(SelfSampleTrainer):
                     break
 
         self.saveState(self.model, global_iter, final=True, name=f"{self.model_name}_{self.config.task}_{self.config.ds}")
+        if not self.config.debug:
+            self.writer.flush()
         if self.config.learnable_lr:
             self.saveState(self.lrs, global_iter, final=True, name=f'lr_{self.model_name}')
 
