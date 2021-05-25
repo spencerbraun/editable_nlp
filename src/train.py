@@ -55,9 +55,8 @@ class BaseTrainer:
         self.validation_set = validation
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         if not self.config.debug:
-            run_name = f'{self.model_name}{ewc}{split}_{self.config.task}_{self.config.ds}_{self.timestamp}'
-            self.writer = SummaryWriter(log_dir=os.path.join(self.config.write_loc, 'runs', run_name))
-            self.writer.add_hparams(hparam_dict=self.config.__dict__, metric_dict=dict(), run_name=run_name)
+            self.run_name = f'{self.model_name}{ewc}{split}_{self.config.task}_{self.config.ds}_{self.timestamp}'
+            self.writer = SummaryWriter(log_dir=os.path.join(self.config.write_loc, 'runs', self.run_name))
             transformers.logging.set_verbosity_info()
 
         self.epoch = 0
@@ -163,6 +162,10 @@ class BaseTrainer:
         accuracy /= iters
         self.echo(self.global_iter, **{'loss/val': loss, 'accuracy/val': accuracy})
         self.tensorBoard(self.global_iter, **{'loss/val': loss, 'accuracy/val': accuracy})
+        self.writer.add_hparams(config.__dict__, {
+            'val_loss': loss,
+            'val_accuracy': accuracy
+        })
 
         self.model.train()
 

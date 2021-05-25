@@ -141,8 +141,10 @@ hf/
 data/
 data_all/
 runs/
+tb_archive/
 models/
 eval/
 outputs/
 scripts/
+
 
