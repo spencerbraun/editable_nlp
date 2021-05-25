@@ -611,10 +611,6 @@ class SelfSampleTrainer(EditTrainer):
                                 fmodel.set_editing(False)
                             diffopt.step(loss)
 
-                        LOG.info((edit_outer_tokens_.shape, edit_outer_mask_.shape, edit_labels_.shape))
-                        LOG.info(edit_outer_tokens_)
-                        LOG.info(edit_outer_mask_)
-                        LOG.info(edit_labels_)
                         edit_out = fmodel(
                             edit_outer_tokens_,
                             attention_mask=edit_outer_mask_,
@@ -735,13 +731,13 @@ class EWCTrainer(SelfSampleTrainer):
         self._update_fisher(self.data)
 
     def _update_mean(self):
-        print("Estimating parameter means")
+        LOG.info("Estimating parameter means")
         for n, p in self.model.named_parameters():
             buffer_name = n.replace('.', '__')
             self.model.register_buffer(buffer_name + '_mean', p.data.clone())
 
     def _update_fisher(self, dataloader, n_batches=10000):
-        print("Estimating parameter Fisher matrices")
+        LOG.info("Estimating parameter Fisher matrices")
         grads = [None] * len(list(self.model.parameters()))  # Store the sum of gradients of log likelihoods
         n_samples = 0
         for batch_idx, datapack in enumerate(dataloader):
@@ -785,7 +781,7 @@ class EWCTrainer(SelfSampleTrainer):
         opt = torch.optim.Adam(self.model.parameters(), self.config.outer_lr)
 
         global_iter = 0
-        print("Starting Training")
+        LOG.info("Starting Training")
 
         self.lrs = [
             torch.nn.Parameter(torch.tensor(self.config.inner_lr))
@@ -939,7 +935,7 @@ class EWCTrainer(SelfSampleTrainer):
                 if self.config.learnable_lr:
                     self.saveState(self.lrs, global_iter, name=f'lr_{self.model_name}')
                 if global_iter >= self.config.max_iter:
-                    print("Reached max iterations")
+                    LOG.info("Reached max iterations")
                     break
 
         self.saveState(self.model, global_iter, final=True, name=f"{self.model_name}_{self.config.task}_{self.config.ds}")
