@@ -73,7 +73,7 @@ class BaseTrainer:
                 config=self.config,
 
                 name=f"{self.model_name}{ewc}{split}_{self.config.task}_{self.config.ds}_{self.timestamp}{RAND}",
-                dir="/tmp",
+                dir=f"/tmp/{os.environ['USER']}",
                 notes=self.config.notes,
             )
             transformers.logging.set_verbosity_info()
