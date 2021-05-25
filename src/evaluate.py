@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 from datetime import datetime
+import logging
 
 import glob
 import numpy as np
