@@ -28,6 +28,9 @@ from IPython.display import display
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 TOKENIZER = None
 
+LOG = logging.getLogger(__name__)
+
+
 def get_params(model):
     return torch.cat([p.view(-1) for p in model.parameters()])
 
@@ -129,11 +132,11 @@ def getClozeIndexedProbs(model, index, gold_tokens, sent_tokens, labels, silent=
         if not silent:
             global TOKENIZER
             if TOKENIZER is None:
-                TOKENIZER = utils.loadTokenizer(name='bart-base', cache_dir='/juice/scr/spencerb/results/')
-            print('*'*50)
-            print(f"GOLD: {TOKENIZER.batch_decode(labels)}")
-            print(f"GUESS: {TOKENIZER.batch_decode(output_lps.argmax(-1))}")
-            print('*'*50)
+                TOKENIZER = utils.loadTokenizer(name='bart-base')
+            LOG.info('*'*50)
+            LOG.info(f"GOLD: {TOKENIZER.batch_decode(labels)}")
+            LOG.info(f"GUESS: {TOKENIZER.batch_decode(output_lps.argmax(-1))}")
+            LOG.info('*'*50)
 
     model.train()
     return (logit_sum, accuracy)
@@ -156,10 +159,10 @@ def loadLr(model_path, lr_path=None):
         elif len(lr_glob) == 0:
             raise AttributeError("No lr specifications found")
         else:
-            print(f"Loading lrs {lr_glob[0]}")
+            LOG.info(f"Loading lrs {lr_glob[0]}")
             lrs = torch.load(lr_glob[0])
     else:
-        print(f"Loading passed lrs {lr_path}")
+        LOG.info(f"Loading passed lrs {lr_path}")
         lrs = torch.load(lr_path)
 
     return lrs
@@ -188,7 +191,8 @@ def performOneEdit(
     inner_opt = (torch.optim.SGD(param_groups))
 
     if task == 'gen':
-        edit_tokens, edit_mask, edit_labels = edit_package
+        edit_inner, edit_inner_mask, edit_labels = edit_package
+        edit_outer, edit_outer_mask = edit_inner, edit_inner_mask
         idxProbs = getIndexedProbs
     elif task == 'cloze':
         (
@@ -200,7 +204,7 @@ def performOneEdit(
 
     logit_hist = []
     logit_hist.append(
-        idxProbs(model, edit_locs, gold_tokens, edit_tokens,
+        idxProbs(model, edit_locs, gold_tokens, edit_outer,
         None if task == 'gen' else edit_labels),
     )
 
@@ -217,8 +221,8 @@ def performOneEdit(
             if hasattr(fmodel, "set_editing"):
                 fmodel.set_editing(True)
             output = fmodel(
-                edit_tokens,
-                attention_mask=edit_mask,
+                edit_inner,
+                attention_mask=edit_inner_mask,
                 labels=edit_labels
             )
             if hasattr(fmodel, "set_editing"):
@@ -237,14 +241,14 @@ def performOneEdit(
                     )
 
             logit_hist.append(
-                idxProbs(fmodel, edit_locs, gold_tokens, edit_tokens,
+                idxProbs(fmodel, edit_locs, gold_tokens, edit_outer,
                 None if task == 'gen' else edit_labels),
             )
 
         ll_change = (abs(logit_hist[0][0]) - abs(logit_hist[-1][0]))/abs(logit_hist[0][0])
         prob_change = logit_hist[-1][0].exp() - logit_hist[0][0].exp()
-        print(f"prob history: {[l[0].exp() for l in logit_hist]}")
-        print(f"Edit step {edit_step}; d_prob {prob_change}; ll change {ll_change}; logit {logit_hist[-1][0]}; loss {output.loss}")
+        LOG.info(f"prob history: {[l[0].exp() for l in logit_hist]}")
+        LOG.info(f"Edit step {edit_step}; d_prob {prob_change}; ll change {ll_change}; logit {logit_hist[-1][0]}; loss {output.loss}")
 
     edited_model = copy.deepcopy(model)
     edited_model.load_state_dict(fmodel.state_dict())
@@ -259,7 +263,7 @@ def genModelText(finetuned, lm_tokens):
     input_size = input_ids.size()[-1]
 
     finetuned.eval()
-    print(f"generating, {DEVICE}")
+    LOG.info(f"generating, {DEVICE}")
     output_sequence = finetuned.generate(
         input_ids=input_ids,
         max_length=input_size + 5,
@@ -305,7 +309,7 @@ def evalEditable(
     with open(saveloc, "w") as f:
         f.write("train_step,n_edit_steps,logits,orig_ppl,new_ppl\n")
         for train_step, (lm_data, edit_example, new_ent, old_ent) in enumerate(dataloader):
-            print(f"TS {train_step}")
+            LOG.info(f"TS {train_step}")
 
             lm_tokens, lm_mask = lm_data
             orig_ent_tokens = old_ent[0].flatten()
@@ -439,8 +443,8 @@ def evalSelfSample(
         try:
             lrs = loadLr(model_name, lr_path)
         except AttributeError as e:
-            print(e)
-            print("No learning rates found!")
+            LOG.info(e)
+            LOG.info("No learning rates found!")
             lrs = []
 
     n_edits = 0
@@ -463,9 +467,9 @@ def evalSelfSample(
             "logits,orig_ppl,new_ppl,orig_acc,new_acc,orig_lp,new_lp,norm,edit_accuracy\n"
             )
         for train_step, batch in enumerate(dataloader):
-            print(f"Val Step {train_step}")
-            print(f"Edit number {edit_number}")
-            print(f"Model number {model_number}")
+            LOG.info(f"Val Step {train_step}")
+            LOG.info(f"Edit number {edit_number}")
+            LOG.info(f"Model number {model_number}")
             edit_package, edit_locs, gold_tokens = processBatch(batch, cloze=cloze, pad_token_id=pad_token_id)
 
             model_edited, logit_hist, ll_change, loss = performOneEdit(
@@ -511,7 +515,7 @@ def evalSelfSample(
             n_edits +=1
             if n_edits >= (n_runs * seq_edits):
                 break
-        print(f"Saved results to {saveloc}")
+        LOG.info(f"Saved results to {saveloc}")
     if copy_to:
         shutil.copyfile(saveloc, f"{copy_to}/{filename}")
 
@@ -608,10 +612,10 @@ class ModelComps:
     def summary(self, long=False):
         if not self.stats:
             self.runStats()
-        print("Model Parameters:")
+        LOG.info("Model Parameters:")
         display(self.modelStats)
 
-        print("Success Metrics")
+        LOG.info("Success Metrics")
 
         stats_df = (
             pd.DataFrame(self.stats).T
@@ -625,9 +629,9 @@ class ModelComps:
             display(stats_df)
 
     def plotter(self, xlim=[]):
-        print("Plotting Logits")
+        LOG.info("Plotting Logits")
         for name, model in self.models.items():
-            print(name)
+            LOG.info(name)
 
             plt.hist(model.orig_logits, alpha=0.4, label="Pre-Edit")
             plt.hist(model.new_logits, alpha=0.4, label="Post-Edit")
@@ -663,7 +667,7 @@ if __name__ == "__main__":
     loc = utils.sailPreprocess()
     name = args.model if not args.gen else 'gpt2'
     if args.model_path:
-        print(f"Using model {name}")
+        LOG.info(f"Using model {name}")
         model, tokenizer = utils.loadTrainedModel(
             args.model_path,
             name=name,
@@ -672,7 +676,7 @@ if __name__ == "__main__":
             ortho=args.ortho
         )
     else:
-        print(f"Using OTS {name} model")
+        LOG.info(f"Using OTS {name} model")
         model, tokenizer = utils.loadOTSModel(name=name, cache_dir=loc)
         utils.prep_for_maml(model)
         args.model_path = f'OTS_{name}'

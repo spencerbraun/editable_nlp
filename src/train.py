@@ -5,6 +5,9 @@ import time
 import random
 from datetime import datetime
 from collections import defaultdict
+import logging
+import string
+import copy
 
 import numpy as np
 import torch
@@ -23,7 +26,15 @@ from evaluate import performOneEdit
 from masked_lm.data import MaskedLMDataloader
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+log_fmt = logging.Formatter(fmt='%(asctime)s - %(levelname)s [%(filename)s:%(lineno)d] %(message)s')
+handler = logging.StreamHandler()
+handler.setFormatter(log_fmt)
+LOG = logging.getLogger(__name__)
+LOG.setLevel(logging.INFO)
+LOG.addHandler(handler)
 
+RAND = ''.join(random.choice(string.ascii_letters) for i in range(5))
+val = np.random.uniform()
 
 class BaseTrainer:
     def __init__(self, config, dataloader, model_path=None):
@@ -42,13 +53,14 @@ class BaseTrainer:
 
         #outfiles
         self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        self.hyperspath = f"{self.model_dir}/hypers.{self.timestamp}"
-        self.errpath = f"{self.config.write_loc}/errors/errors_{self.timestamp}"
         split = '_split' if self.config.split_params else ''
+
+        self.hyperspath = f"{self.model_dir}/hypers.{self.timestamp}{RAND}"
+        self.errpath = f"{self.config.write_loc}/errors/errors_{self.timestamp}{RAND}"
         self.statepath = (
             lambda model, epoch, step:
-            f"{self.model_dir}/{model}{split}_epoch{epoch}_ts{step}.{self.timestamp}"
-            )
+            f"{self.model_dir}/{model}{split}_epoch{epoch}_ts{step}.{self.timestamp}{RAND}"
+        )
 
         self.data = dataloader
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -58,7 +70,7 @@ class BaseTrainer:
                 entity='patchable-lm',
                 config=self.config,
                 name=f"{self.model_name}{split}_{self.config.task}_{self.config.ds}_{self.timestamp}",
-                dir=self.config.write_loc,
+                dir="/tmp",
                 notes=self.config.notes,
             )
             transformers.logging.set_verbosity_info()
@@ -71,7 +83,7 @@ class BaseTrainer:
             if final:
                 torch.save(
                     out_obj,
-                    self.statepath(name, self.epoch, 9999)
+                    self.statepath(name, self.epoch, self.config.max_iter)
                     )
             elif (train_step > 0) and (train_step % self.config.model_save_pt == 0):
                 torch.save(
@@ -81,7 +93,7 @@ class BaseTrainer:
 
     def echo(self, train_step, **kwargs):
         if not self.config.silent:
-            print((
+            LOG.info((
                     f"Epoch: {self.epoch}; TrainStep {train_step}; ",
                     f"; ".join([f"{key} {val:0.4f}" for key,val in kwargs.items()])
                 ))
@@ -109,7 +121,7 @@ class BaseTrainer:
             )
 
         global_iter = 0
-        print("Starting Fine-tuning")
+        LOG.info("Starting Fine-tuning")
 
         for epoch in range(self.config.epochs):
             self.epoch = epoch
@@ -212,7 +224,7 @@ class EditTrainer(BaseTrainer):
             )
 
         global_iter = 0
-        print("Starting Training")
+        LOG.info("Starting Training")
 
         self.lrs = [
             torch.nn.Parameter(torch.tensor(self.config.inner_lr))
@@ -235,7 +247,7 @@ class EditTrainer(BaseTrainer):
                 ent_tokens = ent_tokens[ent_tokens != 50256]
                 edit_locs = utils.locateSubset(edit_tokens, ent_tokens)
                 if edit_locs.nelement() == 0:
-                    print(f"Unable to locate edit on TS {train_step}")
+                    LOG.info(f"Unable to locate edit on TS {train_step}")
                     if not os.path.exists(f"{self.errpath}"):
                         os.mkdir(f"{self.errpath}")
                     torch.save(edit_tokens, f"{self.errpath}/edit_tokens_{train_step}")
@@ -331,7 +343,7 @@ class EditTrainer(BaseTrainer):
                 if self.config.learnable_lr:
                     self.saveState(lr_opt, global_iter, name='lr')
                 if global_iter >= self.config.max_iter:
-                    print("Reached max iterations")
+                    LOG.info("Reached max iterations")
                     break
 
             # if (train_step % 1000 == 0) & (not self.config.debug):
@@ -359,7 +371,7 @@ class SelfSampleTrainer(EditTrainer):
         input_ids = lm_tokens[:, :edit_loc]
         input_size = input_ids.size()[-1]
 
-        print("generating")
+        LOG.info("generating")
         output_sequence = self.model.generate(
             input_ids=input_ids,
             max_length=input_size + 5,
@@ -467,7 +479,6 @@ class SelfSampleTrainer(EditTrainer):
 
                 with torch.no_grad():
                     orig_ppl = self.perplexity(self.model, subset)
-                print(ds, batch_idx, time.time() - start)
 
                 model_out, logit_hist, ll_change, loss = performOneEdit(
                     self.model,
@@ -512,7 +523,7 @@ class SelfSampleTrainer(EditTrainer):
         opt = torch.optim.Adam(pg)
 
         global_iter = 0
-        print("Starting Training")
+        LOG.info("Starting Training")
 
         self.lrs = [
             torch.nn.Parameter(torch.tensor(self.config.inner_lr))
@@ -596,6 +607,10 @@ class SelfSampleTrainer(EditTrainer):
                                 fmodel.set_editing(False)
                             diffopt.step(loss)
 
+                        LOG.info((edit_outer_tokens_.shape, edit_outer_mask_.shape, edit_labels_.shape))
+                        LOG.info(edit_outer_tokens_)
+                        LOG.info(edit_outer_mask_)
+                        LOG.info(edit_labels_)
                         edit_out = fmodel(
                             edit_outer_tokens_,
                             attention_mask=edit_outer_mask_,
@@ -699,7 +714,7 @@ class SelfSampleTrainer(EditTrainer):
                 if self.config.learnable_lr:
                     self.saveState(self.lrs, global_iter, name=f'lr_{self.model_name}')
                 if global_iter >= self.config.max_iter:
-                    print("Reached max iterations")
+                    LOG.info("Reached max iterations")
                     break
 
         self.saveState(self.model, global_iter, final=True, name=f"{self.model_name}_{self.config.task}_{self.config.ds}")
@@ -758,19 +773,19 @@ if __name__ == "__main__":
     config.noise_coef = args.noise_coef
     config.notes = args.notes
     if args.outer_lr is not None:
-        print(f"Overriding default outer_lr {config.outer_lr} with new value {args.outer_lr}")
+        LOG.info(f"Overriding default outer_lr {config.outer_lr} with new value {args.outer_lr}")
         config.outer_lr = args.outer_lr
     if args.inner_lr is not None:
-        print(f"Overriding default inner_lr {config.inner_lr} with new value {args.inner_lr}")
+        LOG.info(f"Overriding default inner_lr {config.inner_lr} with new value {args.inner_lr}")
         config.inner_lr = args.inner_lr
     if args.lr_lr is not None:
-        print(f"Overriding default lr_lr {config.lr_lr} with new value {args.lr_lr}")
+        LOG.info(f"Overriding default lr_lr {config.lr_lr} with new value {args.lr_lr}")
         config.lr_lr = args.lr_lr
     if args.cedit is not None:
-        print(f"Overriding default cedit {config.cedit} with new value {args.cedit}")
+        LOG.info(f"Overriding default cedit {config.cedit} with new value {args.cedit}")
         config.cedit = args.cedit
     if args.cloc is not None:
-        print(f"Overriding default cloc {config.cloc} with new value {args.cloc}")
+        LOG.info(f"Overriding default cloc {config.cloc} with new value {args.cloc}")
         config.cloc = args.cloc
 
     if args.gen:
