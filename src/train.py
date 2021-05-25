@@ -163,7 +163,7 @@ class BaseTrainer:
         self.echo(self.global_iter, **{'loss/val': loss, 'accuracy/val': accuracy})
         self.tensorBoard(self.global_iter, **{'loss/val': loss, 'accuracy/val': accuracy})
         self.writer.add_hparams(
-            hparam_dict=config.__dict__,
+            hparam_dict=self.config.__dict__,
             metric_dict={'val_loss': loss, 'val_accuracy': accuracy},
             run_name=self.run_name
         )
@@ -553,6 +553,15 @@ class SelfSampleTrainer(EditTrainer):
                 f'eval_loss/{ds}': np.mean(loss_hist),
             }
             self.tensorBoard(self.val_iter * self.config.val_interval, **metrics)
+            self.writer.add_hparams(
+                hparam_dict=self.config.__dict__,
+                metric_dict={
+                    'ppl_drawdown': np.mean(ppl_pre_hist) - np.mean(ppl_post_hist),
+                    'val_accuracy': np.mean(accuracy_hist),
+                    'val_loss': np.mean(loss_hist),
+                },
+                run_name=self.run_name
+            )
 
         self.val_iter += 1
 
@@ -821,6 +830,10 @@ class EWCTrainer(SelfSampleTrainer):
                     'Validation perplexity': ['Multiline', ['ppl_pre/val', 'ppl_post/val']],
                 },
                 'Loss': {
+                    'Base': ['Multiline', ['loss/base']],
+                    'Edit': ['Multiline', ['loss/edit']],
+                    'Locality': ['Multiline', ['loss/loc']],
+                    'Train': ['Multiline', ['loss/train']],
                     'Eval': ['Multiline', ['eval_loss/train', 'eval_loss/val']]
                 }
             })
