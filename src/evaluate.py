@@ -29,6 +29,8 @@ from IPython.display import display
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 TOKENIZER = None
 
+logging.basicConfig(format='%(asctime)s - %(levelname)s [%(filename)s:%(lineno)d] %(message)s',
+                    level=logging.INFO)
 LOG = logging.getLogger(__name__)
 
 

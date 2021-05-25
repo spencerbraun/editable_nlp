@@ -26,12 +26,10 @@ from evaluate import performOneEdit
 from masked_lm.data import MaskedLMDataloader
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-log_fmt = logging.Formatter(fmt='%(asctime)s - %(levelname)s [%(filename)s:%(lineno)d] %(message)s')
-handler = logging.StreamHandler()
-handler.setFormatter(log_fmt)
+
+logging.basicConfig(format='%(asctime)s - %(levelname)s [%(filename)s:%(lineno)d] %(message)s',
+                    level=logging.INFO)
 LOG = logging.getLogger(__name__)
-LOG.setLevel(logging.INFO)
-LOG.addHandler(handler)
 
 RAND = ''.join(random.choice(string.ascii_letters) for i in range(5))
 val = np.random.uniform()
