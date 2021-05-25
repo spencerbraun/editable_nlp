@@ -162,10 +162,11 @@ class BaseTrainer:
         accuracy /= iters
         self.echo(self.global_iter, **{'loss/val': loss, 'accuracy/val': accuracy})
         self.tensorBoard(self.global_iter, **{'loss/val': loss, 'accuracy/val': accuracy})
-        self.writer.add_hparams(config.__dict__, {
-            'val_loss': loss,
-            'val_accuracy': accuracy
-        })
+        self.writer.add_hparams(
+            hparam_dict=config.__dict__,
+            metric_dict={'val_loss': loss, 'val_accuracy': accuracy},
+            run_name=self.run_name
+        )
 
         self.model.train()
 
