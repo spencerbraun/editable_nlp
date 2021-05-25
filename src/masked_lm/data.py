@@ -59,7 +59,7 @@ class LAMADataset(torch.utils.data.IterableDataset):
     def tokenize(self, text, max_len):
         tok = self.tokenizer(
             text,
-            truncation=False,
+            truncation=True,
             max_length=max_len,
             padding="max_length",
             return_tensors='pt'
@@ -255,7 +255,7 @@ class KILTDataset(torch.utils.data.IterableDataset):
     def tokenize(self, text, max_len):
         tok = self.tokenizer(
             text,
-            truncation=False,
+            truncation=True,
             max_length=max_len,
             padding="max_length",
             return_tensors='pt'
