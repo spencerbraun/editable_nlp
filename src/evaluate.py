@@ -77,7 +77,7 @@ def perplexity(model, dataloader, cloze=False, iteration=0, pad_token_id=0):
     avg_loss, ppl = acc.get_metrics()
     return torch.tensor(ppl)
 
-def drawdown(model, dataloader, iteration=0, pad_token_id=0):
+def cloze_performance(model, dataloader, iteration=0, pad_token_id=0):
     model.to(DEVICE)
     model.eval()
     acc = utils.NLLAccumulator()
@@ -85,7 +85,7 @@ def drawdown(model, dataloader, iteration=0, pad_token_id=0):
     indices = np.random.default_rng(iteration).choice(len(dataloader), 200, replace=False)
     subset = Subset(dataloader, indices)
 
-    probs = 0
+    logit_sum = 0
     accs = []
     total_n = 0
     with torch.no_grad():
@@ -97,9 +97,9 @@ def drawdown(model, dataloader, iteration=0, pad_token_id=0):
             _, _, _,
             ) = batch
             lm_tokens_, lm_mask_, lm_labels_ = strip_padding(lm_tokens, lm_mask, lm_labels, pad_token_id)
-            logit_sum, accuracy = getClozeIndexedProbs(model, 0, lm_labels_,lm_tokens_, lm_labels_, silent=False)
+            logit, accuracy = getClozeIndexedProbs(model, 0, lm_labels_,lm_tokens_, lm_labels_, silent=False)
             accs.append(accuracy)
-            probs += logit_sum
+            logit_sum += logit
             total_n += acc.n_predictions_for_labels(lm_labels_, offset=0)
 
     return np.mean(accs), logit_sum / total_n
@@ -473,7 +473,7 @@ def evalSelfSample(
 
     orig_ppl = perplexity(model, dataloader, cloze=cloze, pad_token_id=pad_token_id)
     if cloze:
-        orig_acc, orig_lp = drawdown(model, dataloader, iteration=n_edits, pad_token_id=pad_token_id)
+        orig_acc, orig_lp = cloze_performance(model, dataloader, iteration=n_edits, pad_token_id=pad_token_id)
     else:
         orig_acc, orig_lp = "", ""
     orig_params = get_params(model)
@@ -504,7 +504,7 @@ def evalSelfSample(
             if edit_number % 20 == 0:
                 new_ppl = perplexity(model_edited, dataloader, cloze=cloze, iteration=n_edits, pad_token_id=pad_token_id)
                 if cloze:
-                    new_acc, new_lp = drawdown(model_edited, dataloader, iteration=n_edits, pad_token_id=pad_token_id)
+                    new_acc, new_lp = cloze_performance(model_edited, dataloader, iteration=n_edits, pad_token_id=pad_token_id)
                 else:
                     new_acc, new_lp = "", ""
             else:
