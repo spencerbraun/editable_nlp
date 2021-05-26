@@ -1,4 +1,5 @@
 import os
+import tempfile
 import argparse
 import glob
 import time
@@ -67,13 +68,14 @@ class BaseTrainer:
         self.validation_set = validation
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         if not self.config.debug:
+            wandb_dir = tempfile.mkdtemp()
+            LOG.info(f"Writing wandb local logs to {wandb_dir}")
             wandb.init(
                 project='patchable' if self.config.task == 'gen' else 'patchable_masked',
                 entity='patchable-lm',
                 config=self.config,
-
                 name=f"{self.model_name}{ewc}{split}_{self.config.task}_{self.config.ds}_{self.timestamp}{RAND}",
-                dir=f"/tmp/{os.environ['USER']}",
+                dir=wandb_dir,
                 notes=self.config.notes,
             )
             transformers.logging.set_verbosity_info()
