@@ -504,15 +504,16 @@ def evalSelfSample(
                 delta=(delta if mmtm else None)
             )
 
-            if edit_number % stats_freq == 0:
-                new_ppl = perplexity(model_edited, dataloader, cloze=cloze, iteration=n_edits, pad_token_id=pad_token_id)
+            if ((edit_number+1) % stats_freq == 0) or (edit_number == 0):
                 if cloze:
                     new_acc, new_lp = cloze_performance(model_edited, dataloader, iteration=n_edits, pad_token_id=pad_token_id)
+                    new_ppl = ""
                 else:
+                    new_ppl = perplexity(model_edited, dataloader, cloze=cloze, iteration=n_edits, pad_token_id=pad_token_id)
                     new_acc, new_lp = "", ""
             else:
-                new_ppl = ""
-                new_acc, new_lp = "", ""
+                new_ppl, new_acc, new_lp = "", "", ""
+                
 
             norm_diff = orig_params.sub(get_params(model_edited)).norm().item()
 
@@ -675,9 +676,9 @@ if __name__ == "__main__":
     parser.add_argument('--kilt', action='store_true')
     parser.add_argument('--ortho', action='store_true')
     parser.add_argument('--split_params', action='store_true')
-    parser.add_argument('--edit_steps', default=5, type=int)
+    parser.add_argument('--edit_steps', default=1, type=int)
     parser.add_argument('--seq_edits', default=1, type=int)
-    parser.add_argument('--stats_freq', default=20, type=int)
+    parser.add_argument('--stats_freq', default=10, type=int)
     parser.add_argument('--model', type=str, default='bart-base')
     parser.add_argument('--mmtm', action='store_true')
     parser.add_argument('--delta', type=float, default=5.0e-3, help='Delta for MMTM')
@@ -779,7 +780,8 @@ if __name__ == "__main__":
             lr_path=args.lr_path,
             mmtm=args.mmtm,
             delta=args.delta,
-            n_runs=args.n_runs
+            n_runs=args.n_runs,
+            stats_freq=args.stats_freq
             )
 
     else:
