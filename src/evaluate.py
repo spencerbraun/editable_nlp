@@ -191,7 +191,7 @@ def performOneEdit(
         {'params': p, 'lr': 1e-3}
         for p in model.inner_params()
     ]
-    inner_opt = torch.optim.Adam(param_groups) if mode == "mmtm" else torch.optim.SGD(param_groups)
+    inner_opt = torch.optim.Adam(param_groups, lr=1e-5) if mode == "mmtm" else torch.optim.SGD(param_groups)
 
     if task == 'gen':
         edit_tokens, edit_mask, edit_labels = edit_package
@@ -454,7 +454,8 @@ def evalSelfSample(
 
     pad_token_id = getPadTokenID(model)
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
-    filename = f"edit_success_{timestamp}_{os.path.basename(model_name)}"
+    mmtm = f'_mmtm{delta}' if mmtm else ''
+    filename = f"edit_success{mmtm}_{timestamp}_{os.path.basename(model_name)}"
     saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}"
 
     if model_name.startswith('OTS'):
@@ -667,6 +668,12 @@ class ModelComps:
 
 
 if __name__ == "__main__":
+    random.seed(123)
+    np.random.seed(123)
+    torch.manual_seed(123)
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True)
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path', help='')
     parser.add_argument('--lr_path', default=None)
@@ -681,7 +688,7 @@ if __name__ == "__main__":
     parser.add_argument('--stats_freq', default=10, type=int)
     parser.add_argument('--model', type=str, default='bart-base')
     parser.add_argument('--mmtm', action='store_true')
-    parser.add_argument('--delta', type=float, default=5.0e-3, help='Delta for MMTM')
+    parser.add_argument('--delta', type=float, default=5.0e-4, help='Delta for MMTM')
     parser.add_argument('--copy_to')
     parser.add_argument('--n_runs', type=int, default=5)
     args = parser.parse_args()
