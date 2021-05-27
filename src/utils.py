@@ -264,7 +264,7 @@ def loadTrainedModel(
         wrap_model(model, name, ortho=ortho)
 
     try:
-        model.load_state_dict(torch.load(modelPath))
+        model.load_state_dict(torch.load(modelPath), strict=False)
     except Exception as e:
         print(f"Couldn't load pre-trained weights for model: {e}; continuing with OTS weights")
     

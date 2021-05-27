@@ -236,7 +236,7 @@ class BaseTrainer:
                 self.global_iter += 1
                 self.echo(train_step, **{"loss/base": l_base})
                 self.wandb_log(self.global_iter, {"loss/base": l_base})
-                self.saveState(self.model, train_step, "gpt2")
+                self.saveState(self.model, train_step, self.model_name)
 
 
         self.saveState(self.model, train_step)
@@ -794,7 +794,7 @@ class EWCTrainer(SelfSampleTrainer):
 
     def _update_fisher(self, dataloader, n_batches=10000):
         LOG.info("Estimating parameter Fisher matrices")
-        grads = [None] * len(list(self.model.parameters()))  # Store the sum of gradients of log likelihoods
+        sq_grad_sums = [None] * len(list(self.model.parameters()))  # Store the sum of squared gradients of log likelihoods
         n_samples = 0
         for batch_idx, datapack in enumerate(dataloader):
             if batch_idx >= n_batches:
@@ -803,6 +803,7 @@ class EWCTrainer(SelfSampleTrainer):
             if self.config.task == 'gen':
                 (lm_tokens, lm_mask, _, _, _, _, _, _, _) = datapack
                 lm_tokens, lm_mask, lm_labels = self.mask_padding(lm_tokens, lm_mask)
+
             elif self.config.task == 'cloze':
                 (
                     lm_tokens, lm_mask, lm_labels,
@@ -810,22 +811,24 @@ class EWCTrainer(SelfSampleTrainer):
                     _, _, _,
                     _, _, _,
                 ) = datapack
-                lm_tokens, lm_mask, lm_labels = self.mask_padding(lm_tokens, lm_mask, lm_labels)
+
+            lm_tokens_, lm_mask_, lm_labels_ = self.strip_padding(lm_tokens, lm_mask, lm_labels)
 
             model_out = self.model(
-                lm_tokens,
-                attention_mask=lm_mask,
-                labels=lm_labels
+                lm_tokens_,
+                attention_mask=lm_mask_,
+                labels=lm_labels_
             )
-            ll = F.log_softmax(model_out.logits, -1).sum()
+            lps = F.log_softmax(model_out.logits, -1).gather(-1, lm_labels_.view(1, 1, -1))
+            ll = torch.sum(lps)
             for g_idx, g in enumerate(A.grad(ll, self.model.parameters())):
-                grads[g_idx] = g if grads[g_idx] is None else (grads[g_idx] + g)
+                sq_grad_sums[g_idx] = g.data.clone()**2 if sq_grad_sums[g_idx] is None else (sq_grad_sums[g_idx] + g.data.clone()**2)
             n_samples += lm_tokens.shape[0]
 
-        for (n, p), g in zip(self.model.named_parameters(), grads):
+        for (n, p), sq_grad_sum in zip(self.model.named_parameters(), sq_grad_sums):
             buffer_name = n.replace('.', '__')
-            g_avg = g / n_samples
-            self.model.register_buffer(buffer_name + '_fisher', g_avg.data.clone() ** 2)
+            sq_grad = sq_grad_sum / n_samples
+            self.model.register_buffer(buffer_name + '_fisher', sq_grad)
 
 
     def run(self):
@@ -1003,8 +1006,6 @@ if __name__ == "__main__":
     random.seed(123)
     np.random.seed(123)
     torch.manual_seed(123)
-    torch.backends.cudnn.benchmark = False
-    torch.use_deterministic_algorithms(True)
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--editable', action='store_true')
@@ -1028,6 +1029,7 @@ if __name__ == "__main__":
     parser.add_argument('--noise_coef', type=float, default=None)
     parser.add_argument('--notes', type=str, default='')
     parser.add_argument('--lr_lr', type=float, default=None)
+    parser.add_argument('--epochs', type=int, default=None)
     args = parser.parse_args()
 
     loc = utils.sailPreprocess()
@@ -1037,7 +1039,8 @@ if __name__ == "__main__":
 
     config = (
         SelfSampleGPT2Config() if args.gen else
-        ClozeBartConfig() if args.model == 'bart-base' else
+        LamaBartConfig() if args.model == 'bart-base' and args.lama else
+        KiltBartConfig() if args.model == 'bart-base' and args.kilt else
         TrainConfig() if args.finetune else
         ClozeT5Config()
     )
@@ -1045,6 +1048,7 @@ if __name__ == "__main__":
     config.bs = args.bs
     config.n_edits = args.n_edits
     config.ewc = args.ewc
+    config.ewc_weight = args.ewc_weight
     config.split_params = args.split_params
     config.debug = args.debug if args.debug else config.debug
     config.val_interval = args.val_interval
@@ -1067,6 +1071,9 @@ if __name__ == "__main__":
     if args.cloc is not None:
         LOG.info(f"Overriding default cloc {config.cloc} with new value {args.cloc}")
         config.cloc = args.cloc
+    if args.epochs is not None:
+        LOG.info(f"Overriding default epochs {config.epochs} with new value {args.epochs}")
+        config.epochs = args.epochs
 
     if args.gen:
         train = utils.retrieveUnifiedDataset(

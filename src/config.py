@@ -76,7 +76,7 @@ class ClozeT5Config:
 
         self.silent = False
 
-class ClozeBartConfig:
+class LamaBartConfig:
     def __init__(self):
         self.task = 'cloze'
         self.model_name = 'bart-base' #t5-small or gpt2
@@ -96,6 +96,30 @@ class ClozeBartConfig:
         self.debug = False
         self.model_save_pt = 5000
         self.write_loc = '..'
-        self.ft_model_name = None
+        self.ft_model_name = 'bart-base_epoch0_ts285000.2021-05-24_22-15-37-529207byKYd'
+
+        self.silent = False
+
+class KiltBartConfig:
+    def __init__(self):
+        self.task = 'cloze'
+        self.model_name = 'bart-base' #t5-small or gpt2
+        self.inner_loop = 'template' #sentence, template, or random
+        self.max_val_len = 2000
+        
+        self.inner_lr = 1e-2
+        self.outer_lr = 1e-4
+        self.epochs = 2
+        self.max_iter = 40000
+        self.n_edit_steps = 1
+        self.cedit = 5
+        self.cloc = 10
+        self.learnable_lr = True
+        self.lr_lr = 1e-3
+
+        self.debug = False
+        self.model_save_pt = 5000
+        self.write_loc = '..'
+        self.ft_model_name = 'bart-base_epoch7_ts40000.2021-05-25_22-13-53-187518OQgeF'
 
         self.silent = False
