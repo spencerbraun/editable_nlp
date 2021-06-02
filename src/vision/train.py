@@ -1,9 +1,9 @@
 import os
+import tempfile
 import glob
 import time
 import random
 import copy
-from datetime import datetime
 
 import numpy as np
 import torch
@@ -12,7 +12,6 @@ import torch.nn.functional as F
 import torch.autograd as A
 from torch.utils.data import DataLoader, Subset, random_split
 import torchvision
-from torchvision.models import resnet18, densenet169
 
 from omegaconf import DictConfig, OmegaConf, open_dict
 import hydra
@@ -22,8 +21,6 @@ import vision.utils as utils
 from vision.data_process import loadCIFAR, loadImageNet
 from vision.evaluate import accuracy, editGenerator, performEdits
 from alg.senn_conditional import ConditionalLinearWrapper
-
-eps = np.finfo(np.float32).eps.item()
 
 
 class BaseTrainer:
@@ -38,21 +35,19 @@ class BaseTrainer:
             os.makedirs(self.model_dir)
 
         num_classes = len(train_set.classes)
-        load_model = densenet169 if config.model == 'densenet169' else resnet18
-        self.model = utils.loadOTSModel(load_model, num_classes, self.config.pretrained, layernorm=self.config.layernorm)
+        self.model = utils.loadOTSModel(config.model, num_classes, self.config.pretrained, layernorm=self.config.layernorm)
         if not self.config.pretrained and self.config.model_path:
             model_path = os.path.join(self.config.loc, self.config.model_path)
             self.model.load_state_dict(torch.load(model_path))
             print(f"Loaded model weights from {model_path}")
-        self.original_model = copy.deepcopy(self.model)
+        if self.config.loss == 'kl':
+            self.original_model = copy.deepcopy(self.model)
 
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         # outfiles
         date, time = run_dir.split('/')[-2:]
         self.timestamp = f"{date}.{time}"
-        self.hyperspath = f"{self.model_dir}/hypers.{self.timestamp}"
-        self.errpath = f"{run_dir}/errors/errors_{self.timestamp}"
         self.statepath = (
             lambda model, epoch, step: 
             f"{self.model_dir}/{model}_epoch{epoch}_ts{step}.{self.timestamp}"
@@ -61,12 +56,14 @@ class BaseTrainer:
         self.configure_data(train_set, val_set)
 
         if not self.config.debug:
+            wandb_dir = tempfile.mkdtemp()
+            print(f"Writing wandb local logs to {wandb_dir}")
             wandb.init(
                 project='patchable-cnn',
                 entity='patchable-lm',
                 config=self.config,
                 name=f"{self.config.dataset}/{self.config.model}/{self.config.task}_{self.timestamp}",
-                dir=self.config.loc,
+                dir=wandb_dir,
             )
 
     def saveState(self, state_obj, train_step, name="finetune", final=False):
@@ -170,16 +167,14 @@ class BaseTrainer:
         if not self.config.debug:
             wandb.log({
                 'step': self.global_iter,
-                'loss/val_avg': loss,
-                'acc/top1_val_avg': acc1,
-                'acc/top5_val_avg': acc5,
+                'loss/val': loss,
+                'acc/top1_val': acc1,
+                'acc/top5_val': acc5,
             })
         
         return loss.item(), acc1, acc5
 
     def run(self):
-        if not self.config.debug:
-            torch.save(self.config, self.hyperspath)
 
         self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config.outer_lr)
         self.scheduler = None
@@ -224,9 +219,8 @@ class BaseTrainer:
             if not self.config.debug:
                 wandb.log({
                     'step': self.global_iter,
-                    'loss/train_avg': losses.avg,
-                    'acc/top1_train_avg': top1.avg,
-                    'acc/top5_train_avg': top5.avg,
+                    'acc/top1_train': top1.avg,
+                    'acc/top5_train': top5.avg,
                 })
 
             if self.scheduler:
@@ -238,12 +232,8 @@ class BaseTrainer:
 class EditTrainer(BaseTrainer):
     def __init__(self, config, train_set, val_set, model_path=None):
         super().__init__(config, train_set, val_set)
-        if self.config.model == 'resnet18':
-            utils.prep_resnet_for_maml(self.model, layers=[3])
-        elif self.config.model == 'densenet169':
-            utils.prep_densenet_for_maml(self.model)
+        utils.prep_resnet_for_maml(self.model, layers=[3])
 
-        # TODO make compatible with DenseNet
         if config.split_params:
             basic_block_predicate = lambda m: isinstance(m, torchvision.models.resnet.BasicBlock)
             n_hidden = lambda m: m.conv2.weight.shape[0]
@@ -502,8 +492,6 @@ class EditTrainer(BaseTrainer):
             })
 
     def run(self):
-        if not self.config.debug:
-            torch.save(self.config, self.hyperspath)
 
         if self.config.weight_decay:
             if self.config.split_params:
@@ -586,8 +574,8 @@ class EditTrainer(BaseTrainer):
                 wandb.log({
                     'step': self.global_iter,
                     'loss/train_avg': losses.avg,
-                    'acc/top1_train_avg': top1.avg,
-                    'acc/top5_train_avg': top5.avg,
+                    'acc/top1_train': top1.avg,
+                    'acc/top5_train': top5.avg,
                     'lr': self.opt.param_groups[0]['lr'],
                     'lr_lr': self.lr_opt.param_groups[0]['lr']
                 })

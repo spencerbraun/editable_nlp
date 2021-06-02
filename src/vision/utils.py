@@ -2,7 +2,7 @@
 import os
 import torch
 import torch.nn as nn
-import torchvision.models as models
+import torchvision
 import numpy as np
 
 class AverageMeter(object):
@@ -70,7 +70,7 @@ def prep_densenet_for_maml(model, adapt_all: bool = False):
     type(model).inner_params = _inner_params
 
 
-def loadOTSModel(loadModel=models.resnet18, num_classes=1000, pretrained=True, layernorm=False):
+def loadOTSModel(model='resnet18', num_classes=1000, pretrained=True, layernorm=False):
     def _recursive_apply(module: nn.Module):
         n_replaced = 0
         for idx, (name, mod) in enumerate(module.named_children()):
@@ -83,7 +83,8 @@ def loadOTSModel(loadModel=models.resnet18, num_classes=1000, pretrained=True, l
 
         return n_replaced
 
-    model = loadModel(num_classes=num_classes, pretrained=pretrained)
+    load_model = getattr(torchvision.models, model)
+    model = load_model(num_classes=num_classes, pretrained=pretrained)
     if pretrained:
         print("Loaded pretrained model")
 
@@ -91,14 +92,6 @@ def loadOTSModel(loadModel=models.resnet18, num_classes=1000, pretrained=True, l
         n_replaced = _recursive_apply(model)
         print(f"Replaced {n_replaced} BatchNorm layers with LayerNorm")
 
-    return model
-
-
-def loadTrainedModel(modelPath, loadModel=models.resnet18, num_classes=1000):
-    model = loadModel(num_classes=num_classes)
-    model.load_state_dict(torch.load(modelPath))
-    model.eval()
-    print(f"Loaded checkpoint from {modelPath}")
     return model
 
 

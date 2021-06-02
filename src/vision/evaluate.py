@@ -15,7 +15,6 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, RandomSampler, random_split
 import torchvision
-from torchvision.models import resnet18, densenet169
 import higher
 
 from vision.data_process import loadCIFAR, loadImageNet
@@ -344,15 +343,9 @@ def main(config: DictConfig):
     dataset = loadCIFAR(loc, 'val') if config.dataset == 'cifar10' else loadImageNet(loc, 'val')
     num_classes = len(dataset.classes)
 
-    load_model = densenet169 if config.model == 'densenet169' else resnet18
-    model = utils.loadOTSModel(load_model, num_classes, config.pretrained)
+    model = utils.loadOTSModel(config.model, num_classes, config.pretrained)
+    tils.prep_resnet_for_maml(model)
 
-    if config.model == 'resnet18':
-        utils.prep_resnet_for_maml(model)
-    elif config.model == 'densenet169':
-        utils.prep_densenet_for_maml(model)
-
-    # TODO make compatible with DenseNet
     if config.split_params:
         basic_block_predicate = lambda m: isinstance(m, torchvision.models.resnet.BasicBlock)
         n_hidden = lambda m: m.conv2.weight.shape[0]
