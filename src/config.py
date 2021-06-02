@@ -96,7 +96,7 @@ class LamaBartConfig:
         self.debug = False
         self.model_save_pt = 5000
         self.write_loc = '..'
-        self.ft_model_name = 'bart-base_epoch0_ts285000.2021-05-24_22-15-37-529207byKYd'
+        self.ft_model_name = 'bart-base_epoch0_ts465000.2021-05-26_10-49-10-193575oIaiD'
 
         self.silent = False
 
@@ -120,6 +120,6 @@ class KiltBartConfig:
         self.debug = False
         self.model_save_pt = 5000
         self.write_loc = '..'
-        self.ft_model_name = 'bart-base_epoch7_ts40000.2021-05-25_22-13-53-187518OQgeF'
+        self.ft_model_name = 'bart-base_epoch9_ts40000.2021-05-26_10-47-02-543657yWNwE'
 
         self.silent = False

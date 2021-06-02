@@ -256,7 +256,8 @@ def loadTrainedModel(
     tokenizer=True, 
     split_params: bool = False, 
     adapt_all: bool = False,
-    ortho: bool = False
+    ortho: bool = False,
+    ewc: bool = False,
     ):
     model, tok = loadOTSModel(name=name, cache_dir=cache_dir)
     prep_for_maml(model, adapt_all)
@@ -264,7 +265,8 @@ def loadTrainedModel(
         wrap_model(model, name, ortho=ortho)
 
     try:
-        model.load_state_dict(torch.load(modelPath), strict=False)
+        model.load_state_dict(torch.load(modelPath))
+        print(f"Loaded checkpoint from {modelPath}")
     except Exception as e:
         print(f"Couldn't load pre-trained weights for model: {e}; continuing with OTS weights")
     

@@ -14,6 +14,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.autograd as A
 import higher
 import transformers
 from torch.utils.data import Subset
@@ -46,8 +47,11 @@ def strip_padding(tokens, mask, labels, pad_token_id=0):
     tokens = tokens[mask_].unsqueeze(0)
     mask = mask[mask_].unsqueeze(0)
 
-    label_mask = labels != pad_token_id
-    labels = labels[label_mask].unsqueeze(0)
+    if mask_.shape == labels.shape:
+        labels = labels[mask_].unsqueeze(0)
+    else:
+        label_mask = labels != pad_token_id
+        labels = labels[label_mask].unsqueeze(0)
 
     return tokens.to(DEVICE), mask.to(DEVICE), labels.to(DEVICE)
 
@@ -179,7 +183,7 @@ def performOneEdit(
     gold_tokens,
     n_edit_steps=10,
     mode="val",
-    delta=None
+    hyperparam=None
     ):
 
     if not hasattr(model, "inner_params"):
@@ -242,6 +246,19 @@ def performOneEdit(
 
             if hasattr(fmodel, "set_editing"):
                 fmodel.set_editing(False)
+
+            loss = output.loss
+            pre_loss = loss.item()
+            if mode == 'ewc':
+                for n, p in fmodel.named_parameters():
+                    buffer_name = n.replace('.', '__')
+                    mean = getattr(fmodel, f'{buffer_name}_mean')
+                    fisher = getattr(fmodel, f'{buffer_name}_fisher')
+                    loss += hyperparam * 0.5 * (fisher * (p - mean) ** 2).sum()
+
+                    post_loss = loss.item()
+                    LOG.info(f'Quadratic loss: {post_loss - pre_loss}')
+
             diffopt.step(output.loss)
 
             if mode == 'mmtm':
@@ -250,8 +267,8 @@ def performOneEdit(
                     edited_p = fp.data.detach()
                     fp.data = (
                         orig_p + torch.clamp(
-                            torch.clamp(edited_p - orig_p, min=-delta),
-                            max=delta
+                            torch.clamp(edited_p - orig_p, min=-hyperparam),
+                            max=hyperparam
                         )
                     )
 
@@ -303,6 +320,67 @@ def genModelText(finetuned, lm_tokens):
     edit_locs = torch.tensor([edit_loc + i - 1 for i in range(5)])
 
     return edit_tokens, edit_mask, edit_labels, gold_tokens, edit_locs
+
+
+def mask_padding(tokenizer, task, tokens, mask, label=None):
+        if task == 'gen':
+            return tokens.to(DEVICE), mask.to(DEVICE), tokens.masked_fill(mask == 0, -100).to(DEVICE)
+        elif task == 'cloze':
+            return (tokens.to(DEVICE), mask.to(DEVICE),
+            label.masked_fill(label == tokenizer.pad_token_id, -100).to(DEVICE))
+
+
+def compute_mean_params(model, device=DEVICE):
+    LOG.info("Estimating parameter means")
+    model.to(device)
+    for n, p in model.named_parameters():
+        buffer_name = n.replace('.', '__')
+        model.register_buffer(buffer_name + '_mean', p.data.clone())
+
+
+def compute_fisher(model, tokenizer, dataloader, task, n_batches=1000, device=DEVICE):
+    LOG.info("Estimating parameter Fisher matrices")
+    model.to(device)
+    sq_grad_sums = [None] * len(list(model.parameters()))  # Store the sum of squared gradients of log likelihoods
+    for idx, p in enumerate(model.parameters()):
+        sq_grad_sums[idx] = torch.zeros_like(p, device=device)
+
+    n_samples = 0
+    for batch_idx, datapack in enumerate(dataloader):
+        if batch_idx >= n_batches:
+            break
+
+        if task == 'gen':
+            (lm_tokens, lm_mask, _, _, _, _, _, _, _) = datapack
+            lm_tokens, lm_mask, lm_labels = mask_padding(tokenizer, task, lm_tokens, lm_mask)
+
+        elif task == 'cloze':
+            (
+                lm_tokens, lm_mask, lm_labels,
+                _, _, _,
+                _, _, _,
+                _, _, _,
+            ) = datapack
+
+        lm_tokens, lm_mask, lm_labels = lm_tokens.to(device), lm_mask.to(device), lm_labels.to(device)
+        lm_tokens_, lm_mask_, lm_labels_ = strip_padding(lm_tokens, lm_mask, lm_labels, tokenizer.pad_token_id)
+
+        model_out = model(
+            lm_tokens_,
+            attention_mask=lm_mask_,
+            labels=lm_labels_
+        )
+        lps = F.log_softmax(model_out.logits, -1).gather(-1, lm_labels_.view(1, 1, -1))
+        ll = torch.sum(lps)  # deterministic scatter add not supported yet
+        for g_idx, g in enumerate(A.grad(ll, model.parameters())):
+            sq_grad_sums[g_idx] += g.data.clone()**2
+        n_samples += lm_tokens.shape[0]
+
+    for (n, p), sq_grad_sum in zip(model.named_parameters(), sq_grad_sums):
+        buffer_name = n.replace('.', '__')
+        sq_grad = sq_grad_sum / n_samples
+        model.register_buffer(buffer_name + '_fisher', sq_grad)
+
 
 def evalEditable(
     model,
@@ -446,7 +524,8 @@ def evalSelfSample(
     copy_to="",
     cloze=False,
     mmtm=False,
-    delta=None,
+    ewc=False,
+    hyperparam=None,
     lr_path=None,
     n_runs=5,
     stats_freq=20
@@ -454,8 +533,8 @@ def evalSelfSample(
 
     pad_token_id = getPadTokenID(model)
     timestamp = datetime.now().strftime("%Y%m%d.%H.%m.%s")
-    mmtm = f'_mmtm{delta}' if mmtm else ''
-    filename = f"edit_success{mmtm}_{timestamp}_{os.path.basename(model_name)}"
+    mode = f'_mmtm{hyperparam}' if mmtm else f'_ewc{hyperparam}' if ewc else ''
+    filename = f"edit_success{mode}_{timestamp}_{os.path.basename(model_name)}"
     saveloc = f"{loc}/eval/{filename}" if not testset else f"{loc}/eval/test/{filename}"
 
     if model_name.startswith('OTS'):
@@ -501,8 +580,8 @@ def evalSelfSample(
                 edit_locs,
                 gold_tokens,
                 n_edit_steps=n_edit_steps,
-                mode=("mmtm" if mmtm else "val"),
-                delta=(delta if mmtm else None)
+                mode=("mmtm" if mmtm else "ewc" if ewc else "val"),
+                hyperparam=(hyperparam if mmtm or ewc else None)
             )
 
             if ((edit_number+1) % stats_freq == 0) or (edit_number == 0):
@@ -689,6 +768,8 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=str, default='bart-base')
     parser.add_argument('--mmtm', action='store_true')
     parser.add_argument('--delta', type=float, default=5.0e-4, help='Delta for MMTM')
+    parser.add_argument('--ewc', action='store_true')
+    parser.add_argument('--ewc_weight', type=float, default=1e5, help='Weight for EWC')
     parser.add_argument('--copy_to')
     parser.add_argument('--n_runs', type=int, default=5)
     args = parser.parse_args()
@@ -720,6 +801,21 @@ if __name__ == "__main__":
             dataset=ds,
             self_sample=args.gen
         )
+
+        if args.ewc:
+            train = utils.retrieveUnifiedDataset(
+                tokenizer,
+                data_loc=loc,
+                bs=1,
+                dataset='train',
+                self_sample=args.gen,
+                n_edits=1
+            )
+            compute_mean_params(model)
+            torch.use_deterministic_algorithms(False)
+            compute_fisher(model, tokenizer, train, 'gen')
+            torch.use_deterministic_algorithms(True)
+
         evalSelfSample(
             model,
             dataloader,
@@ -731,7 +827,8 @@ if __name__ == "__main__":
             copy_to=args.copy_to,
             cloze=False,
             mmtm=args.mmtm,
-            delta=args.delta,
+            ewc=args.ewc,
+            hyperparam=(args.delta if args.mmtm else args.ewc_weight if args.ewc else None),
             n_runs=args.n_runs,
             stats_freq=args.stats_freq
             )
@@ -741,13 +838,21 @@ if __name__ == "__main__":
             tokenizer,
             loc=loc,
             bs=1,
-            pct=40,
+            pct=100,
             shuffle=True,
             mode='editable',
             inner_loop='template',
             n_edits=1
         )
         validation = dataloader.validation
+
+        if args.ewc:
+            train = dataloader.train
+            compute_mean_params(model)
+            torch.use_deterministic_algorithms(False)
+            compute_fisher(model, tokenizer, train, 'cloze')
+            torch.use_deterministic_algorithms(True)
+
         evalSelfSample(
             model,
             validation,
@@ -760,7 +865,8 @@ if __name__ == "__main__":
             cloze=True,
             lr_path=args.lr_path,
             mmtm=args.mmtm,
-            delta=args.delta,
+            ewc=args.ewc,
+            hyperparam=(args.delta if args.mmtm else args.ewc_weight if args.ewc else None),
             n_runs=args.n_runs,
             stats_freq=args.stats_freq
             )
@@ -774,6 +880,14 @@ if __name__ == "__main__":
             n_edits=1
         )
         validation = dataloader.validation
+
+        if args.ewc:
+            train = dataloader.train
+            compute_mean_params(model)
+            torch.use_deterministic_algorithms(False)
+            compute_fisher(model, tokenizer, train, 'cloze')
+            torch.use_deterministic_algorithms(True)
+
         evalSelfSample(
             model,
             validation,
@@ -786,7 +900,8 @@ if __name__ == "__main__":
             cloze=True,
             lr_path=args.lr_path,
             mmtm=args.mmtm,
-            delta=args.delta,
+            ewc=args.ewc,
+            hyperparam=(args.delta if args.mmtm else args.ewc_weight if args.ewc else None),
             n_runs=args.n_runs,
             stats_freq=args.stats_freq
             )
