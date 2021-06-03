@@ -1,0 +1,17 @@
+debug: False
+verbose: False
+model_save_pt: 1000
+silent: False
+model_path: null
+n_edits: 1
+cbase: 1
+lr_grad_clip: null
+weight_decay: null
+ortho: False
+layernorm: False
+defaults:
+  - experiment: base_cifar_resnet
+
+bs: 128
+edit_bs: 16
+n_edit_steps: 5

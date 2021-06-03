@@ -5,3 +5,13 @@ torchvision==0.9.1
 transformers==4.5.1
 hydra-core
 wandb
+importlib-metadata
+filelock
+requests
+protobuf
+psutil
+pyyaml
+spacy
+matplotlib
+ipython
+sentencepiece

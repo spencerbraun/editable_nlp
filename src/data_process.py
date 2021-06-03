@@ -77,9 +77,6 @@ class DataProcessor:
                 if not os.path.exists(self.write_dir):
                     os.makedirs(self.write_dir)
                     print(f"Warning: {self.write_dir} does not exist. Creating...")
-                # permuteFile = open(self.write_dir + f'/permuted_entities.{idx}', 'w')
-                # origFile = open(self.write_dir + f'/original_entities.{idx}', 'w')
-                # entFile = open(self.write_dir + f'/entity_swaps.{idx}', 'w')
 
             eligible = list(filter(lambda x: x[3] in self.keep_ents, ents))
             orig_ent = random.choice(eligible)
@@ -92,15 +89,6 @@ class DataProcessor:
             prefix = sent[:start]
             suffix = sent[end:]
             new_sent = prefix + replace_ent + suffix
-
-            # if self.write_dir:
-                # permuteFile.write(new_sent + "\n")
-                # origFile.write(self.raw_texts[idx].strip('\n').strip(" ") + "\n")
-                # entFile.write(f"{orig_ent[0]}|{replace_ent}\n")
-
-                # permuteFile.close()
-                # origFile.close()
-                # entFile.close()
 
             self.output_dict[idx] = {
                 'original': self.raw_texts[idx].strip('\n').strip(" "),
@@ -153,7 +141,7 @@ class NTokenDataset(torch.utils.data.IterableDataset):
         self.loc = data_loc
         self.self_sample = self_sample
         self.n_edits = n_edits
-        self.wiki = WikitextDataset("/scr/em7", dataset=dataset, filter_=False)
+        self.wiki = WikitextDataset(f"{data_loc}/hf", dataset=dataset, filter_=False)
         self.batch_size = batch_size
         self.n_edit_tokens = n_edit_tokens
 
@@ -355,6 +343,7 @@ class WikitextDataset(torch.utils.data.Dataset):
             return self[new_idx]
         
         return item
+
 
 def generateDataset(
     writeDir, 

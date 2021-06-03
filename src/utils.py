@@ -7,8 +7,9 @@ import math
 import glob
 import numpy as np
 import torch
+import torch.nn as nn
 import transformers
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
+from transformers import GPT2Tokenizer, GPT2LMHeadModel, T5Tokenizer, T5ForConditionalGeneration, BartTokenizer, BartForConditionalGeneration
 from data_process import TorchDataset, WikitextDataset, NTokenDataset
 
 from alg.senn_conditional import ConditionalLinearWrapper
@@ -28,33 +29,62 @@ class NLLAccumulator(object):
         return avg, math.e ** avg
 
     @staticmethod
-    def n_predictions_for_labels(labels):
+    def n_predictions_for_labels(labels, offset=1):
         if labels.dim() == 1:
-            return (labels[1:] != -100).sum().item()
+            return (labels[offset:] != -100).sum().item()
         elif labels.dim() == 2:
-            return (labels[:, 1:] != -100).sum().item()
+            return (labels[:, offset:] != -100).sum().item()
         else:
             assert False
 
 
-def loadOTSModel(cache_dir=None):
-    model = GPT2LMHeadModel.from_pretrained(
-        "gpt2", cache_dir=f"{cache_dir}/hf" if cache_dir else None
+
+
+def loadOTSModel(name='gpt2', cache_dir=None):
+    if name == 'gpt2':
+        model = GPT2LMHeadModel.from_pretrained(
+            name, cache_dir=f"{cache_dir}/hf" if cache_dir else None
+            )
+        tokenizer = GPT2Tokenizer.from_pretrained(
+            name, cache_dir=f"{cache_dir}/hf" if cache_dir else None
+            )
+
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"
+    elif name == 't5-small':
+        model = T5ForConditionalGeneration.from_pretrained(
+        "t5-small", cache_dir=f"{cache_dir}/hf" if cache_dir else None
         )
-    tokenizer = GPT2Tokenizer.from_pretrained(
-        'gpt2', cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        tokenizer = T5Tokenizer.from_pretrained(
+            't5-small', cache_dir=f"{cache_dir}/hf" if cache_dir else None
+            )
+    elif name == 'bart-base':
+        model = BartForConditionalGeneration.from_pretrained(
+            "facebook/bart-base", cache_dir=f"{cache_dir}/hf" if cache_dir else None
         )
-    tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "left"
+        tokenizer = BartTokenizer.from_pretrained(
+            "facebook/bart-base", cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        )
 
     return model, tokenizer
 
-def loadTokenizer(cache_dir=None):
-    tokenizer = GPT2Tokenizer.from_pretrained(
-        'gpt2', cache_dir=f"{cache_dir}/hf" if cache_dir else None
+def loadTokenizer(name='gpt2', cache_dir=None):
+    if name == 'gpt2':
+        tokenizer = GPT2Tokenizer.from_pretrained(
+            name, cache_dir=f"{cache_dir}/hf" if cache_dir else None
         )
-    tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "left"
+
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"
+
+    elif name == 't5-small':
+        tokenizer = T5Tokenizer.from_pretrained(
+            't5-small', cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        )
+    elif name == 'bart-base':
+        tokenizer = BartTokenizer.from_pretrained(
+            "facebook/bart-base", cache_dir=f"{cache_dir}/hf" if cache_dir else None
+        )
 
     return tokenizer
 
@@ -69,8 +99,8 @@ def _getFileIds(data_loc, self_sample, dataset, max_obs):
         )
     else:
         writtenFiles = (
-            glob.glob(f"{data_path}/train/permuted*") if dataset == 'train' 
-            else glob.glob(f"{data_path}/valid/original*") if dataset == 'validation' 
+            glob.glob(f"{data_path}/train/permuted*") if dataset == 'train'
+            else glob.glob(f"{data_path}/valid/original*") if dataset == 'validation'
             else glob.glob(f"{data_path}/test/original*")
         )
 
@@ -81,10 +111,10 @@ def _getFileIds(data_loc, self_sample, dataset, max_obs):
 
 
 def retrieveEditDataloader(
-    tokenizer, 
-    bs=10, 
+    tokenizer,
+    bs=10,
     data_loc='..',
-    dataset='train', 
+    dataset='train',
     max_obs=float('inf'),
     shuffle=False,
     self_sample=False,
@@ -111,10 +141,10 @@ def retrieveEditDataloader(
 
 
 def retrieveUnifiedDataset(
-    tokenizer, 
-    bs=10, 
+    tokenizer,
+    bs=10,
     data_loc='..',
-    dataset='train', 
+    dataset='train',
     max_obs=float('inf'),
     shuffle=False,
     self_sample=False,
@@ -132,18 +162,18 @@ def retrieveUnifiedDataset(
 
 
 def wikiDataloader(
-    tokenizer, 
-    bs=10, 
+    tokenizer,
+    bs=10,
     data_loc='..',
     dataset='train',
     shuffle=False,
     max_length=200,
     min_length=20
     ):
-    
-    tokenizer.padding_side = "left" 
+
+    tokenizer.padding_side = "left"
     tokenizer.pad_token = tokenizer.eos_token
-    
+
     def pad_collate(batch):
         toks = tokenizer(
                 batch,
@@ -152,14 +182,14 @@ def wikiDataloader(
                 padding=True
             )
         return (
-            torch.tensor(toks['input_ids']), 
+            torch.tensor(toks['input_ids']),
             torch.tensor(toks['attention_mask'])
         )
 
     ds = WikitextDataset(
-        data_loc=f"{data_loc}/hf", 
+        data_loc=f"{data_loc}/hf",
         dataset=dataset,
-        pct=100, 
+        pct=100,
         min_length=min_length
     )
     dataloader = torch.utils.data.DataLoader(
@@ -174,31 +204,72 @@ def wikiDataloader(
     return dataloader
 
 
-def split_conv_layers(model):
+def wrap_model(model, name, ortho=False):
     # find Conv1D layers to replace (they annoyingly have transposed weights)
-    conv_predicate = lambda mod: (
-        isinstance(mod, transformers.models.gpt2.modeling_gpt2.Conv1D) and mod.weight.shape[1] == 768
-    )
-    ConditionalLinearWrapper.wrap_model(model, model.config.n_embd, -1, conv_predicate)
+    modules = None
+    if name == 'gpt2':
+        d = 3072
+        module_predicate = lambda mod: (
+            isinstance(mod, transformers.models.gpt2.modeling_gpt2.Conv1D) and mod.weight.shape[1] == d
+        )
+        n_hidden = d #model.config.n_embd
+        modules = None
+    elif name == 'bart-base':
+        module_predicate = lambda mod: (
+            isinstance(mod, transformers.models.bart.modeling_bart.BartDecoderLayer) or
+            isinstance(mod, transformers.models.bart.modeling_bart.BartEncoderLayer)
+        )
+        n_hidden = model.config.d_model
+    elif name == 't5-small':
+        module_predicate = lambda mod: (
+            isinstance(mod, transformers.models.t5.modeling_t5.T5DenseReluDense)
+        )
+        n_hidden = model.config.d_model
+    else:
+        raise ValueError(f"Invalid model type `{name}` specified")
 
+    ConditionalLinearWrapper.wrap_model(model, n_hidden, -1, module_predicate, ortho=ortho, modules=modules)
 
 def prep_for_maml(model, adapt_all: bool = False):
     # Default inner loop adaptation parameters
+    norm_pred = lambda n: 'ln' not in n and 'bn' not in n
     def _inner_params(self):
-        if adapt_all:
-            return list(self.transformer.h.parameters())
-        else:
-            return list(self.transformer.h[-3:].parameters())
+        if hasattr(self, 'transformer'): # gpt2
+            if adapt_all:
+                return [p for (n,p) in self.transformer.h.named_parameters() if norm_pred(n)]
+            else:
+                return [p for (n,p) in self.transformer.h[-3:].named_parameters() if norm_pred(n)]
+        elif hasattr(self, 'model'): # bart
+            return (list(self.model.encoder.layers[-3:].parameters()) + 
+                    list(self.model.decoder.layers[-3:].parameters()))
+        else: # t5
+            return (list(self.encoder.block[-3:].parameters()) + 
+                    list(self.decoder.block[-3:].parameters()))
+
     type(model).inner_params = _inner_params
 
 
-def loadTrainedModel(modelPath, cache_dir=None, tokenizer=True, split_params: bool = False, adapt_all: bool = False):
-    model, tok = loadOTSModel(cache_dir=cache_dir)
+def loadTrainedModel(
+    modelPath=None, 
+    name='gpt2', 
+    cache_dir=None, 
+    tokenizer=True, 
+    split_params: bool = False, 
+    adapt_all: bool = False,
+    ortho: bool = False,
+    ewc: bool = False,
+    ):
+    model, tok = loadOTSModel(name=name, cache_dir=cache_dir)
     prep_for_maml(model, adapt_all)
     if split_params:
-        split_conv_layers(model)
-        
-    model.load_state_dict(torch.load(modelPath))
+        wrap_model(model, name, ortho=ortho)
+
+    try:
+        model.load_state_dict(torch.load(modelPath))
+        print(f"Loaded checkpoint from {modelPath}")
+    except Exception as e:
+        print(f"Couldn't load pre-trained weights for model: {e}; continuing with OTS weights")
+    
     model.eval()
     if not tokenizer:
         return model
@@ -230,19 +301,19 @@ def sailPreprocess(debug=False):
         machine_name = platform.node().split(".")[0]
         scr = max(os.listdir(f"/{machine_name}"))
         save_loc = f"/{machine_name}/{scr}"
-        local_dir = f"{save_loc}/{user}"
+        local_dir = '/juice/scr/spencerb/results'
 
         if os.path.exists(local_dir) | debug:
             return local_dir
 
-        os.mkdir(f"{save_loc}/{user}")
-        os.mkdir(f"{save_loc}/{user}/models")
-        os.mkdir(f"{save_loc}/{user}/models/finetune")
-        os.mkdir(f"{save_loc}/{user}/errors")
-        os.mkdir(f"{save_loc}/{user}/eval")
-        os.mkdir(f"{save_loc}/{user}/hf")
+        os.mkdir(f"{local_dir}")
+        os.mkdir(f"{local_dir}/models")
+        os.mkdir(f"{local_dir}/models/finetune")
+        os.mkdir(f"{local_dir}/errors")
+        os.mkdir(f"{local_dir}/eval")
+        os.mkdir(f"{local_dir}/hf")
         copyfile(
-            "/juice/scr/spencerb/editable_nlp/self_sample.zip", 
+            "/juice/scr/spencerb/editable_nlp/self_sample.zip",
             f"{local_dir}/self_sample.zip"
             )
         with zipfile.ZipFile(f"{local_dir}/self_sample.zip") as zf:

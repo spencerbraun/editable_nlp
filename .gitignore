@@ -2,6 +2,10 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*~
+
+# emacs autosave
+*~
 
 # C extensions
 *.so
@@ -140,4 +144,5 @@ data_all/
 runs/
 models/
 eval/
-
+outputs/
+scripts/
