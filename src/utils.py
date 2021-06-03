@@ -110,36 +110,6 @@ def _getFileIds(data_loc, self_sample, dataset, max_obs):
     return list(range(limitIndex))
 
 
-def retrieveEditDataloader(
-    tokenizer,
-    bs=10,
-    data_loc='..',
-    dataset='train',
-    max_obs=float('inf'),
-    shuffle=False,
-    self_sample=False,
-    n_edits=1,
-):
-
-    ds = TorchDataset(
-        _getFileIds(data_loc, self_sample, dataset, max_obs),
-        tokenizer,
-        data_loc=data_loc,
-        dataset=dataset,
-        self_sample=self_sample,
-        n_edits=n_edits
-    )
-    dataloader = torch.utils.data.DataLoader(
-        ds,
-        batch_size=bs,
-        num_workers=2,
-        pin_memory=True,
-        shuffle=shuffle
-    )
-
-    return dataloader
-
-
 def retrieveUnifiedDataset(
     tokenizer,
     bs=10,
@@ -305,19 +275,6 @@ def sailPreprocess(debug=False):
 
         if os.path.exists(local_dir) | debug:
             return local_dir
-
-        os.mkdir(f"{local_dir}")
-        os.mkdir(f"{local_dir}/models")
-        os.mkdir(f"{local_dir}/models/finetune")
-        os.mkdir(f"{local_dir}/errors")
-        os.mkdir(f"{local_dir}/eval")
-        os.mkdir(f"{local_dir}/hf")
-        copyfile(
-            "/juice/scr/spencerb/editable_nlp/self_sample.zip",
-            f"{local_dir}/self_sample.zip"
-            )
-        with zipfile.ZipFile(f"{local_dir}/self_sample.zip") as zf:
-            zf.extractall(f"{local_dir}")
     else:
         save_loc = "/iris/u"
         local_dir = f"{save_loc}/{user}/code/editable_nlp"
