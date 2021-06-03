@@ -1,0 +1,14 @@
+# @package _global_
+
+task: finetune
+model: resnet18
+pretrained: False
+dataset: cifar10
+bs: 128
+
+loss: cross_entropy
+outer_lr: 0.001
+epochs: 100
+
+learnable_lr: False
+split_params: False

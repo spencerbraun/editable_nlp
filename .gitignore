@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*~
 
 # emacs autosave
 *~
@@ -145,4 +146,3 @@ models/
 eval/
 outputs/
 scripts/
-
