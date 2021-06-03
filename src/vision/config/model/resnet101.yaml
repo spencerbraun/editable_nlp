@@ -1,0 +1,4 @@
+# @package _group_
+pretrained: False
+name: resnet101
+path: /iris/u/clin/code/editable_nlp/src/outputs/2021-06-02/10-36-49/models/resnet101_epoch199_ts78000.2021-06-02.10-36-49

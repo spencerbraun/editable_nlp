@@ -42,14 +42,9 @@ def prep_resnet_for_maml(model, adapt_all: bool = False, layers=[3]):
             return list(self.parameters())
         else:
             params = []
-            if 1 in layers:
-                params.extend(list(self.layer1.parameters()))
-            if 2 in layers:
-                params.extend(list(self.layer2.parameters()))
-            if 3 in layers:
-                params.extend(list(self.layer3.parameters()))
-            if 4 in layers:
-                params.extend(list(self.layer4.parameters()))
+            for l in layers:
+                params.extend(getattr(self, f"layer{l}").parameters())
+            assert len(params) > 0
             return params
 
     for mod in model.modules():

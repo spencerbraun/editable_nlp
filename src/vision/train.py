@@ -4,6 +4,9 @@ import glob
 import time
 import random
 import copy
+from datetime import datetime
+import tempfile
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -35,9 +38,9 @@ class BaseTrainer:
             os.makedirs(self.model_dir)
 
         num_classes = len(train_set.classes)
-        self.model = utils.loadOTSModel(config.model, num_classes, self.config.pretrained, layernorm=self.config.layernorm)
-        if not self.config.pretrained and self.config.model_path:
-            model_path = os.path.join(self.config.loc, self.config.model_path)
+        self.model = utils.loadOTSModel(config.model.name, num_classes, config.model.pretrained, layernorm=config.model.layernorm)
+        if self.config.model.path is not None:
+            model_path = os.path.join(config.loc, config.model.path)
             self.model.load_state_dict(torch.load(model_path))
             print(f"Loaded model weights from {model_path}")
         if self.config.loss == 'kl':
@@ -62,8 +65,8 @@ class BaseTrainer:
                 project='patchable-cnn',
                 entity='patchable-lm',
                 config=self.config,
-                name=f"{self.config.dataset}/{self.config.model}/{self.config.task}_{self.timestamp}",
-                dir=wandb_dir,
+                name=f"{self.config.dataset}/{self.config.model.name}/{self.config.task}_{self.timestamp}",
+                dir=tempfile.mkdtemp()
             )
 
     def saveState(self, state_obj, train_step, name="finetune", final=False):
@@ -210,7 +213,7 @@ class BaseTrainer:
                 if self.global_iter % 100 == 0:
                     self.val_step()
 
-                self.saveState(self.model, self.global_iter, self.config.model)
+                self.saveState(self.model, self.global_iter, self.config.model.name)
                 self.global_iter += 1
 
             print('Epoch {} Train\tLoss: {:.2f}\tTop-1 acc: {:.2f}\tTop-5 acc: {:.2f}'.format(
@@ -232,7 +235,10 @@ class BaseTrainer:
 class EditTrainer(BaseTrainer):
     def __init__(self, config, train_set, val_set, model_path=None):
         super().__init__(config, train_set, val_set)
-        utils.prep_resnet_for_maml(self.model, layers=[3])
+        if self.config.model.name.startswith('resnet'):
+            utils.prep_resnet_for_maml(self.model, adapt_all=config.adapt_all, layers=[3])
+        elif self.config.model.name.startswith('densenet'):
+            utils.prep_densenet_for_maml(self.model, adapt_all=config.adapt_all)
 
         if config.split_params:
             basic_block_predicate = lambda m: isinstance(m, torchvision.models.resnet.BasicBlock)
@@ -347,7 +353,6 @@ class EditTrainer(BaseTrainer):
         total_loss = (l_base + self.config.cloc * sum_l_loc + self.config.cedit * sum_l_edit).item()
 
         info_dict = {
-            'step': self.global_iter,
             'loss/base': l_base.item(),
             'loss/edit': sum_l_edit,
             'loss/loc': sum_l_loc,
@@ -376,16 +381,13 @@ class EditTrainer(BaseTrainer):
                 'Pre-edit top-5 acc: {:.2f}\tPost-edit top-5 acc: {:.2f}'.format(
                 self.global_iter, total_loss, edit_success, acc1_pre, acc1_post, acc5_pre, acc5_post))
 
-        if not self.config.debug:
-            wandb.log(info_dict)
-
         self.opt.step()
         if self.config.learnable_lr:
             self.lr_opt.step()
 
-        return total_loss, acc1_post, acc5_post
+        return total_loss, acc1_post, acc5_post, info_dict
 
-    def val_step(self):
+    def val_step(self, factor=1):
         self.verbose_echo("Validation step")
 
         top1_pre, top5_pre = [], []
@@ -394,7 +396,7 @@ class EditTrainer(BaseTrainer):
 
         n_val_edit_examples = len(self.val_set) // 10
         val_set, val_edit_data = random_split(self.val_set, [len(self.val_set) - n_val_edit_examples, n_val_edit_examples])
-        self.val_edit_gen = editGenerator(val_edit_data, self.config.edit_bs)
+        val_edit_gen = editGenerator(val_edit_data, self.config.edit_bs * factor)
 
         val_loader = DataLoader(
             val_set,
@@ -412,7 +414,7 @@ class EditTrainer(BaseTrainer):
 
                 base_inputs, loc_inputs = torch.split(inputs, [(inputs.shape[0] + 1) // 2, inputs.shape[0] // 2])
                 base_labels, loc_labels = torch.split(labels, [(labels.shape[0] + 1) // 2, labels.shape[0] // 2])
-                edit_inputs, edit_labels = next(self.val_edit_gen)
+                edit_inputs, edit_labels = next(val_edit_gen)
                 self.verbose_echo("Generated edit example")
 
                 base_inputs, base_labels = base_inputs.to(self.device), base_labels.to(self.device)
@@ -483,12 +485,12 @@ class EditTrainer(BaseTrainer):
         if not self.config.debug:
             wandb.log({
                 'step': self.global_iter,
-                'loss/val': np.mean(losses),
-                'edit_success_val': np.mean(edit_successes),
-                'acc/top1_pre_val': np.mean(top1_pre),
-                'acc/top1_post_val': np.mean(top1_post),
-                'acc/top5_pre_val': np.mean(top5_pre),
-                'acc/top5_post_val': np.mean(top5_post),
+                f'loss/val_{factor}': np.mean(losses),
+                f'acc/top1_pre_val_{factor}': np.mean(top1_pre),
+                f'acc/top1_post_val_{factor}': np.mean(top1_post),
+                f'acc/top5_pre_val_{factor}': np.mean(top5_pre),
+                f'acc/top5_post_val_{factor}': np.mean(top5_post),
+                f'edit_success_val_{factor}': np.mean(edit_successes),
             })
 
     def run(self):
@@ -529,7 +531,8 @@ class EditTrainer(BaseTrainer):
         self.global_iter = 0
 
         self.verbose_echo("Starting editable training")
-
+        info_dict_ = defaultdict(list)
+        
         for epoch in range(self.config.epochs):
             self.epoch = epoch
             losses = utils.AverageMeter('Loss', ':.4e')
@@ -553,16 +556,25 @@ class EditTrainer(BaseTrainer):
             for inputs, labels in train_loader:
                 self.verbose_echo("Loaded training batch")
 
-                loss, acc1, acc5 = self.train_step(inputs, labels)
-
+                loss, acc1, acc5, info_dict = self.train_step(inputs, labels)
+                for k, v in info_dict.items():
+                    info_dict_[k].append(v)
+                
                 losses.update(loss, inputs.shape[0])
                 top1.update(acc1, inputs.shape[0])
                 top5.update(acc5, inputs.shape[0])
 
+                if self.global_iter % 10 == 0:
+                    if not self.config.debug:
+                        wandb.log({k: sum(v)/len(v) for (k,v) in info_dict_.items()}, step=self.global_iter)
+                    info_dict_ = defaultdict(list)
+                
                 if self.global_iter % 100 == 0:
                     self.val_step()
+                    self.val_step(2)
+                    self.val_step(4)
 
-                self.saveState(self.model, self.global_iter, self.config.model)
+                self.saveState(self.model, self.global_iter, self.config.model.name)
                 if self.config.learnable_lr:
                     self.saveState(self.lrs, self.global_iter, name='lr')
                 self.global_iter += 1
