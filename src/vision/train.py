@@ -46,11 +46,10 @@ class BaseTrainer:
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         # outfiles
-        date, time = run_dir.split('/')[-2:]
-        self.timestamp = f"{date}.{time}"
+        self.run_id = run_dir.split('/')[-1]
         self.statepath = (
             lambda model, epoch, step: 
-            f"{self.model_dir}/{model}_epoch{epoch}_ts{step}.{self.timestamp}"
+            f"{self.model_dir}/{model}_epoch{epoch}_ts{step}.{self.run_id}"
         )
 
         self.configure_data(train_set, val_set)
@@ -62,7 +61,7 @@ class BaseTrainer:
                 project='patchable-cnn',
                 entity='patchable-lm',
                 config=self.config,
-                name=f"{self.config.dataset}/{self.config.model}/{self.config.task}_{self.timestamp}",
+                name=f"{self.config.dataset}/{self.config.model}/{self.config.task}_{self.run_id}",
                 dir=wandb_dir,
             )
 
@@ -86,10 +85,6 @@ class BaseTrainer:
                 f"Epoch: {self.epoch}; TrainStep {train_step}; ",
                 "; ".join([f"{key} {val}" for key,val in kwargs.items()])
             ))
-    
-    def verbose_echo(self, message):
-        if not self.config.silent and self.config.verbose:
-            print(message)
 
     def configure_data(self, train_set, val_set):
         self.train_set = train_set
@@ -150,7 +145,7 @@ class BaseTrainer:
             val_subset,
             batch_size=100,
             shuffle=True,
-            # num_workers=2,
+            num_workers=2,
             pin_memory=True
         )
 
@@ -176,8 +171,8 @@ class BaseTrainer:
 
     def run(self):
 
-        self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config.outer_lr)
-        self.scheduler = None
+        self.opt = torch.optim.SGD(self.model.parameters(), lr=self.config.outer_lr, momentum=0.9, weight_decay=5e-4)
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.opt, T_max=200)
 
         self.model.train()
         self.model.to(self.device)
@@ -186,7 +181,7 @@ class BaseTrainer:
             self.train_set,
             batch_size=self.config.bs,
             shuffle=True,
-            # num_workers=2,
+            num_workers=2,
             pin_memory=True
         )
 
@@ -199,8 +194,6 @@ class BaseTrainer:
             top5 = utils.AverageMeter('Acc@5', ':6.2f')
 
             for inputs, labels in train_loader:
-                self.verbose_echo("Loaded training batch")
-
                 loss, acc1, acc5 = self.train_step(inputs, labels)
 
                 losses.update(loss, inputs.shape[0])
@@ -246,8 +239,6 @@ class EditTrainer(BaseTrainer):
             )
 
     def train_step(self, inputs, labels):
-        self.verbose_echo("Train step")
-
         base_inputs, loc_inputs = torch.split(inputs, [(inputs.shape[0] + 1) // 2, inputs.shape[0] // 2])
         base_labels, loc_labels = torch.split(labels, [(labels.shape[0] + 1) // 2, labels.shape[0] // 2])
 
@@ -287,7 +278,6 @@ class EditTrainer(BaseTrainer):
 
             if edit_example_idx == backprop_idx:
                 sum_l_edit += l_edit.item()
-                self.verbose_echo(f"Computed edit loss: {l_edit}")
 
                 with torch.no_grad():
                     loc_logits = self.model(loc_inputs)
@@ -301,7 +291,6 @@ class EditTrainer(BaseTrainer):
                     )
                 ).sum(-1).mean()
                 sum_l_loc += l_loc.item()
-                self.verbose_echo(f"Computed locality loss: {l_loc}")
 
                 total_edit_loss = (
                     self.config.cloc * l_loc  + 
@@ -335,14 +324,10 @@ class EditTrainer(BaseTrainer):
         l_base, base_logits = self.compute_base_loss(self.model, base_inputs, base_labels)
         l_base *= self.config.cbase
         l_base.backward()
-        self.verbose_echo(f"Computed base loss: {l_base}")
 
         acc1_pre, acc5_pre = accuracy(base_logits, base_labels, topk=(1,5))
-        self.verbose_echo(f"Computed pre-edit accuracies: {acc1_pre}")
-
         edited_base_logits = model_edited(base_inputs)
         acc1_post, acc5_post = accuracy(edited_base_logits, base_labels, topk=(1,5))
-        self.verbose_echo(f"Computed post-edit accuracies: {acc1_post}")
 
         total_loss = (l_base + self.config.cloc * sum_l_loc + self.config.cedit * sum_l_edit).item()
 
@@ -386,7 +371,6 @@ class EditTrainer(BaseTrainer):
         return total_loss, acc1_post, acc5_post
 
     def val_step(self):
-        self.verbose_echo("Validation step")
 
         top1_pre, top5_pre = [], []
         top1_post, top5_post = [], []
@@ -400,20 +384,17 @@ class EditTrainer(BaseTrainer):
             val_set,
             batch_size=2*self.config.bs,
             shuffle=True,
-            # num_workers=2,
+            num_workers=2,
             pin_memory=True
         )
-        self.verbose_echo("Retrieved validation dataloader")
 
         with torch.no_grad():
             edit_num = 0
             for inputs, labels in val_loader:
-                self.verbose_echo(f"Validation\tEdit number {edit_num}")
 
                 base_inputs, loc_inputs = torch.split(inputs, [(inputs.shape[0] + 1) // 2, inputs.shape[0] // 2])
                 base_labels, loc_labels = torch.split(labels, [(labels.shape[0] + 1) // 2, labels.shape[0] // 2])
                 edit_inputs, edit_labels = next(self.val_edit_gen)
-                self.verbose_echo("Generated edit example")
 
                 base_inputs, base_labels = base_inputs.to(self.device), base_labels.to(self.device)
                 loc_inputs, loc_labels = loc_inputs.to(self.device), loc_labels.to(self.device)
@@ -421,10 +402,8 @@ class EditTrainer(BaseTrainer):
 
                 self.model.train()
                 l_base, base_logits = self.compute_base_loss(self.model, base_inputs, base_labels)
-                self.verbose_echo(f"Computed base loss: {l_base}")
 
                 acc1_pre, acc5_pre = accuracy(base_logits, base_labels, topk=(1, 5))
-                self.verbose_echo(f"Computed pre-edit accuracies: {acc1_pre}")
 
                 top1_pre.append(acc1_pre)
                 top5_pre.append(acc5_pre)
@@ -442,8 +421,6 @@ class EditTrainer(BaseTrainer):
                 prob_changes.append(prob_change)
                 edit_successes.append(edit_success)
 
-                self.verbose_echo(f"Computed edit loss: {l_edit}")
-
                 model_edited.train()
                 loc_logits = self.model(loc_inputs)
                 edited_loc_logits = model_edited(loc_inputs)
@@ -455,8 +432,6 @@ class EditTrainer(BaseTrainer):
                     )
                 ).sum(-1).mean()
 
-                self.verbose_echo(f"Computed locality loss: {l_loc}")
-
                 total_edit_loss = (
                     self.config.cloc * l_loc  + 
                     self.config.cedit * l_edit
@@ -466,8 +441,6 @@ class EditTrainer(BaseTrainer):
 
                 edited_base_logits = model_edited(base_inputs)
                 acc1_post, acc5_post = accuracy(edited_base_logits, base_labels, topk=(1, 5))
-
-                self.verbose_echo(f"Computed post-edit accuracies: {acc1_post}")
 
                 top1_post.append(acc1_post)
                 top5_post.append(acc5_post)
@@ -528,15 +501,11 @@ class EditTrainer(BaseTrainer):
         self.model.to(self.device)
         self.global_iter = 0
 
-        self.verbose_echo("Starting editable training")
-
         for epoch in range(self.config.epochs):
             self.epoch = epoch
             losses = utils.AverageMeter('Loss', ':.4e')
             top1 = utils.AverageMeter('Acc@1', ':6.2f')
             top5 = utils.AverageMeter('Acc@5', ':6.2f')
-
-            self.verbose_echo(f"Epoch {epoch}")
 
             n_train_edit_examples = len(self.train_set) // 10
             train_set, train_edit_data = random_split(self.train_set, [len(self.train_set) - n_train_edit_examples, n_train_edit_examples])
@@ -546,12 +515,11 @@ class EditTrainer(BaseTrainer):
                 self.train_set,
                 batch_size=2*self.config.bs,
                 shuffle=True,
-                # num_workers=2,
+                num_workers=2,
                 pin_memory=True
             )
 
             for inputs, labels in train_loader:
-                self.verbose_echo("Loaded training batch")
 
                 loss, acc1, acc5 = self.train_step(inputs, labels)
 
