@@ -1,0 +1,8 @@
+# @package _global_
+
+epochs: 100
+cedit: 0.01
+cloc: 1
+outer_lr: 5.0e-6
+inner_lr: 1.0e-2
+lr_lr: 1.0e-3

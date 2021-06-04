@@ -1,0 +1,4 @@
+# @package _global_
+
+dataset: cifar10
+bs: 128

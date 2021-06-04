@@ -1,0 +1,4 @@
+# @package _global_
+
+epochs: 200
+outer_lr: 0.1

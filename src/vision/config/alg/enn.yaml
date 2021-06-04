@@ -1,0 +1,10 @@
+# @package _global_
+
+task: editable
+split_params: False
+lr_grad_clip: null
+learnable_lr: True
+adapt_all: False
+edit_bs: 16
+n_edits: 1
+n_edit_steps: 5

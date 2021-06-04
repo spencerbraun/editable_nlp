@@ -1,21 +1,20 @@
 debug: False
-verbose: False
 model_save_pt: 1000
 silent: False
-n_edits: 1
-cbase: 1
-lr_grad_clip: null
-weight_decay: null
-ortho: False
-adapt_all: False
 
+loss: cross_entropy
 model:
   layernorm: False
 
-bs: 128
-edit_bs: 16
-n_edit_steps: 5
-
 defaults:
-  - experiment: base_cifar_resnet
+  - alg: finetune
+  - dataset: cifar10
   - model: resnet18
+  - alg_dataset_model: ${defaults.0.alg}_${defaults.1.dataset}_${defaults.2.model}
+    optional: True
+
+hydra:
+  job:
+    id: 0
+  run:
+    dir: ./outputs/${now:%Y-%m-%d_%H-%M-%S}_${hydra.job.id}

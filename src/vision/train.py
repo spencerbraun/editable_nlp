@@ -63,8 +63,8 @@ class BaseTrainer:
             wandb.init(
                 project='patchable-cnn',
                 entity='patchable-lm',
-                config=self.config,
-                name=f"{self.config.dataset}/{self.config.model}/{self.config.task}_{self.run_id}",
+                config=dict(self.config),
+                name=f"{self.config.dataset}/{self.config.model.name}/{self.config.task}_{self.run_id}",
                 dir=tempfile.mkdtemp()
             )
 
@@ -94,11 +94,8 @@ class BaseTrainer:
         self.val_set = val_set
 
     def compute_base_loss(self, model, inputs, labels):
-        if self.config.loss == 'cross_entropy':
-            logits = model(inputs)
-            loss = F.cross_entropy(logits, labels)
 
-        elif self.config.loss == 'kl':
+        if self.config.loss == 'kl':
             logits = model(inputs)
             self.original_model.eval()
             self.original_model.to(self.device)
@@ -112,6 +109,10 @@ class BaseTrainer:
                     orig_logits.log_softmax(-1)
                 )
             ).sum(-1).mean()
+
+        else:  # Use cross-entropy by default
+            logits = model(inputs)
+            loss = F.cross_entropy(logits, labels)
 
         return loss, logits
 
@@ -241,7 +242,7 @@ class EditTrainer(BaseTrainer):
                 n_hidden,
                 dim=-3,  # (in_channels, out_channels, H, W)
                 predicate=basic_block_predicate,
-                ortho=config.ortho
+                ortho=getattr(config, 'ortho', False)
             )
 
     def train_step(self, inputs, labels):
@@ -328,7 +329,6 @@ class EditTrainer(BaseTrainer):
         # Compute base loss
         self.model.train()  # Use batch stats for base loss
         l_base, base_logits = self.compute_base_loss(self.model, base_inputs, base_labels)
-        l_base *= self.config.cbase
         l_base.backward()
 
         acc1_pre, acc5_pre = accuracy(base_logits, base_labels, topk=(1,5))
@@ -468,7 +468,7 @@ class EditTrainer(BaseTrainer):
 
     def run(self):
 
-        if self.config.weight_decay:
+        if getattr(self.config, 'weight_decay', False):
             if self.config.split_params:
                 self.opt = torch.optim.Adam([
                     {'params': self.model.theta()},
@@ -492,12 +492,6 @@ class EditTrainer(BaseTrainer):
         ]
         self.lr_opt = torch.optim.Adam(self.lrs, lr=self.config.lr_lr)
         self.lr_scheduler = None
-        '''
-        self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.lr_opt,
-            T_max=self.config.epochs
-        )
-        '''
 
         self.model.train()
         self.model.to(self.device)
