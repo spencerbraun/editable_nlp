@@ -1,6 +1,6 @@
 # @package _global_
 
-task: editable
+alg: enn
 split_params: False
 lr_grad_clip: null
 learnable_lr: True

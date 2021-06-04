@@ -39,7 +39,7 @@ class BaseTrainer:
 
         num_classes = len(train_set.classes)
         self.model = utils.loadOTSModel(config.model.name, num_classes, config.model.pretrained, layernorm=config.model.layernorm)
-        if self.config.model.path is not None:
+        if getattr(self.config, 'model.path', None):
             model_path = os.path.join(config.loc, config.model.path)
             self.model.load_state_dict(torch.load(model_path))
             print(f"Loaded model weights from {model_path}")
@@ -64,7 +64,7 @@ class BaseTrainer:
                 project='patchable-cnn',
                 entity='patchable-lm',
                 config=dict(self.config),
-                name=f"{self.config.dataset}/{self.config.model.name}/{self.config.task}_{self.run_id}",
+                name=f"{self.config.dataset}/{self.config.model.name}/{self.config.alg}_{self.run_id}",
                 dir=tempfile.mkdtemp()
             )
 
@@ -577,7 +577,8 @@ def main(config: DictConfig):
     with open_dict(config):
         config.loc = loc
 
-    if config.task == 'editable':
+    editable = config.alg in ['enn', 'senn']
+    if editable:
         trainer = EditTrainer(config, train_set, val_set)
 
     else:

@@ -1,6 +1,6 @@
 # @package _global_
 
-task: editable
+alg: senn
 split_params: True
 ortho: False
 lr_grad_clip: null

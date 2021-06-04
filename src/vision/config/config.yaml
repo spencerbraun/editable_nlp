@@ -10,6 +10,8 @@ defaults:
   - alg: finetune
   - dataset: cifar10
   - model: resnet18
+  - dataset_model: ${defaults.1.dataset}_${defaults.2.model}
+    optional: True
   - alg_dataset_model: ${defaults.0.alg}_${defaults.1.dataset}_${defaults.2.model}
     optional: True
 
