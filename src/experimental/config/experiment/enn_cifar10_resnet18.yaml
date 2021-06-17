@@ -1,0 +1,46 @@
+# @package _global_
+
+wandb:
+  project: patchable-cnn
+  entity: patchable-lm
+
+seed: 123
+# Whether to use determinstic PyTorch algorithms
+deterministic: true
+
+bs: 128
+accumulate_bs: 1
+max_epochs: 100
+
+edit_bs: 16
+cedit: 0.01
+cloc: 1
+n_edits: 1
+n_edit_steps: 5
+
+eval:
+  metrics:
+    accuracy: [1, 5]
+
+optimizer:
+  type: Adam
+  params:
+    lr: 1.0e-4
+edit_optimizer:
+  type: SGD
+  params:
+    lr: 1.0e-1
+lr_optimizer:
+  type: Adam
+  params:
+    lr: 1.0e-3
+
+alg:
+  adapt_all: false
+  edit_modules: layer3
+
+model:
+  params:
+    num_classes: 10
+    pretrained: false
+  path: /iris/u/clin/code/editable_nlp/src/outputs/2021-06-08_17-22-34_0/models/finetune_epoch199_ts9999.2021-06-08_17-22-34_0

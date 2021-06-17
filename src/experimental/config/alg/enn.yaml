@@ -1,0 +1,9 @@
+# @package _group_
+
+name: enn
+learnable_lr: true
+split_params: false
+adapt_all: false
+# Which modules to adapt during edits. Accepts either a list of module names
+#  or an int N indicating to edit the last N layers.
+edit_modules: null

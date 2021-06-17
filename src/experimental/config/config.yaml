@@ -1,0 +1,44 @@
+debug: false
+silent: false
+wandb: null
+
+seed: null
+# Whether to use determinstic PyTorch algorithms
+deterministic: false
+
+model_save_pt: 5000
+max_val_len: 10
+val_interval: 1000
+log_interval: 100
+
+bs: 128
+accumulate_bs: 1
+edit_bs: null
+max_epochs: null
+max_iters: null
+max_iters_per_epoch: null
+
+eval:
+  metrics: null
+
+optimizer:
+  type: Adam
+  params:
+    lr: 1.0e-3
+  grad_clip: null
+  use_scheduler: false
+  scheduler: null
+edit_optimizer: null
+lr_optimizer: null
+
+defaults:
+  - alg: finetune
+  - dataset: cifar10
+  - model: resnet18
+  - experiment: ${defaults.0.alg}_${defaults.1.dataset}_${defaults.2.model}
+
+hydra:
+  job:
+    id: 0
+  run:
+    dir: ./outputs/${now:%Y-%m-%d_%H-%M-%S}_${hydra.job.id}

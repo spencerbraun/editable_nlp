@@ -1,0 +1,31 @@
+# @package _global_
+
+wandb:
+  project: patchable-cnn
+  entity: patchable-lm
+
+seed: 123
+# Whether to use determinstic PyTorch algorithms
+deterministic: true
+
+bs: 128
+accumulate_bs: 1
+max_epochs: 200
+
+optimizer:
+  type: SGD
+  params:
+    lr: 0.01
+    momentum: 0.9
+    weight_decay: 5.0e-4
+  use_scheduler: true
+  scheduler:
+    type: CosineAnnealingLR
+    params:
+      T_max: 200
+
+model:
+  params:
+    num_classes: 10
+    pretrained: false
+  path: /iris/u/clin/code/editable_nlp/src/outputs/2021-06-02/10-36-49/models/finetune_epoch199_ts9999.2021-06-02.10-36-49

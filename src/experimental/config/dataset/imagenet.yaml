@@ -1,0 +1,4 @@
+# @package _group_
+
+name: imagenet
+path: data/ImageNet

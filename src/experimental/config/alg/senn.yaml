@@ -1,0 +1,8 @@
+# @package _group_
+
+name: senn
+learnable_lr: true
+split_params: true
+adapt_all: false
+edit_modules: null
+ortho: false

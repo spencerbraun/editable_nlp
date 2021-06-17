@@ -1,0 +1,6 @@
+# @package _group_
+
+name: cifar10
+path: data
+params:
+  download: true

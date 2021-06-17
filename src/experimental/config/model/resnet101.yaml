@@ -1,0 +1,10 @@
+# @package _group_
+
+name: resnet101
+backend: torchvision
+params:
+  num_classes: 1000
+  pretrained: true
+path: null
+# true if the checkpoint is of a wrapped model, and false otherwise
+wrapped: false
