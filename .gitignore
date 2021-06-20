@@ -142,8 +142,7 @@ hf/
 data/
 data_all/
 runs/
-models/
 eval/
 outputs/
 multirun/
-
+*.pth
