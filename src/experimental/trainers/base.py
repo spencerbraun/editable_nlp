@@ -65,7 +65,7 @@ class BaseTrainer:
                     out_obj, 
                     self.statepath(name, self.epoch, 9999)
                 )
-            elif train_step % self.config.model_save_pt == 0:
+            elif hasattr(self.config, 'model_save_pt') and train_step % self.config.model_save_pt == 0:
                 torch.save(
                     out_obj, 
                     self.statepath(name, self.epoch, train_step)

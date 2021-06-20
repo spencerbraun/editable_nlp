@@ -99,6 +99,9 @@ class EditTrainer(BaseTrainer):
                 self.lr_opt.step()
                 self.lr_opt.zero_grad()
 
+                for lr_idx, lr in enumerate(self.model.edit_lrs):
+                    info_dict[f'lr/lr{lr_idx}'] = lr.data
+
         return info_dict
 
     def val_step(self):

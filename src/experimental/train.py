@@ -9,7 +9,7 @@ from experimental.models import editable_wrap_
 from experimental.build import build_model
 from experimental.trainers import BaseTrainer, EditTrainer
 import experimental.utils as utils
-import experimental.datasets as datasets
+import experimental.dataset as dataset
 
 
 @hydra.main(config_path='config', config_name='config')
@@ -36,10 +36,10 @@ def main(config: DictConfig):
 
     if not hasattr(config.dataset, 'name'):
         raise ValueError('Dataset config must contain attribute `name`.')
-    if not hasattr(datasets, config.dataset.name):
-        raise ValueError('Dataset must be defined in `experimental.datasets`.')
+    if not hasattr(dataset, config.dataset.name):
+        raise ValueError('Dataset must be defined in `experimental.dataset`.')
 
-    dataset_class = getattr(datasets, config.dataset.name)
+    dataset_class = getattr(dataset, config.dataset.name)
     train_set, val_set = dataset_class(config)
 
     if not hasattr(config, 'model'):
