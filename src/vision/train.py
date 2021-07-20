@@ -39,7 +39,7 @@ class BaseTrainer:
 
         num_classes = len(train_set.classes)
         self.model = utils.loadOTSModel(config.model.name, num_classes, config.model.pretrained, layernorm=config.model.layernorm)
-        if getattr(self.config, 'model.path', None):
+        if getattr(self.config.model, 'path', None):
             model_path = os.path.join(config.loc, config.model.path)
             self.model.load_state_dict(torch.load(model_path))
             print(f"Loaded model weights from {model_path}")
@@ -175,8 +175,8 @@ class BaseTrainer:
 
     def run(self):
 
-        self.opt = torch.optim.SGD(self.model.parameters(), lr=self.config.outer_lr, momentum=0.9, weight_decay=5e-4)
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.opt, T_max=200)
+        self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config.outer_lr)
+        self.scheduler = None
 
         self.model.train()
         self.model.to(self.device)
