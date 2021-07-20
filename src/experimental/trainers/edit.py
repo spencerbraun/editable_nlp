@@ -34,8 +34,6 @@ class EditTrainer(BaseTrainer):
         ).sum(-1).mean()
 
         self.val_factors = (1, 2, 4)
-        for factor in self.val_factors:
-            setattr(self, f"val_edit_gen{factor}", self.val_set.edit_generator(batch_size=factor * self.config.edit_bs))
 
     def configure_optimizers(self):
         # Configure base optimizer and schedulers
@@ -119,7 +117,7 @@ class EditTrainer(BaseTrainer):
                 shuffle=True,
                 num_workers=2,
             )
-            val_edit_gen = getattr(self, f"val_edit_gen{factor}")
+            val_edit_gen = self.val_set.edit_generator(batch_size=factor * self.config.edit_bs)
 
             total_loss = 0.0
             total_acc1_pre = 0.0

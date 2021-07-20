@@ -52,7 +52,7 @@ class EditImageNet(EditDataset, ImageFolder):
             batch_size=batch_size,
         )
 
-        for (edit_images, edit_labels), (loc_images, loc_labels) in zip(itertools.cycle(edit_loader), itertools.cycle(loc_loader)):
+        for (edit_images, edit_labels), (loc_images, loc_labels) in zip(edit_loader, loc_loader):
             rand_labels = torch.randint_like(edit_labels, len(self.classes))
             yield edit_images, rand_labels, edit_images, rand_labels, loc_images, loc_labels
 
