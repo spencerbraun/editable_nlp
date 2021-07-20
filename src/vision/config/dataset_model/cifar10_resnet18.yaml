@@ -2,4 +2,5 @@
 
 model:
   pretrained: False
-  path: /iris/u/clin/code/editable_nlp/src/outputs/2021-06-03_02-12-20_0/models/finetune_epoch199_ts9999.2021-06-03_02-12-20_0
+  path: /iris/u/clin/code/editable_nlp/src/outputs/2021-06-08_17-22-34_0/models/finetune_epoch199_ts9999.2021-06-08_17-22-34_0
+  # /iris/u/clin/code/editable_nlp/src/outputs/2021-06-03_02-12-20_0/models/finetune_epoch199_ts9999.2021-06-03_02-12-20_0

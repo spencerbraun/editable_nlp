@@ -45,13 +45,11 @@ class EditImageNet(EditDataset, ImageFolder):
             edit_set,
             sampler=RandomSampler(edit_set),
             batch_size=batch_size,
-            num_workers=2
         )
         loc_loader = DataLoader(
             loc_set,
             sampler=RandomSampler(loc_set),
             batch_size=batch_size,
-            num_workers=2
         )
 
         for (edit_images, edit_labels), (loc_images, loc_labels) in zip(itertools.cycle(edit_loader), itertools.cycle(loc_loader)):

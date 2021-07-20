@@ -26,12 +26,16 @@ class EditTrainer(BaseTrainer):
 
         super().__init__(model, config, train_set, val_set)
 
-        self.edit_gen = self.train_set.edit_generator(batch_size=config.edit_bs)
+        self.train_edit_gen = self.train_set.edit_generator(batch_size=config.edit_bs)
         self.loc_loss_fn = lambda input, target: (
             input.softmax(-1) * (
                 input.log_softmax(-1) - target.log_softmax(-1)
             )
         ).sum(-1).mean()
+
+        self.val_factors = (1, 2, 4)
+        for factor in self.val_factors:
+            setattr(self, f"val_edit_gen{factor}", self.val_set.edit_generator(batch_size=factor * self.config.edit_bs))
 
     def configure_optimizers(self):
         # Configure base optimizer and schedulers
@@ -54,7 +58,7 @@ class EditTrainer(BaseTrainer):
         total_l_loc = 0.0
         for edit in range(self.config.n_edits):
 
-            outer_data, outer_labels, inner_data, inner_labels, loc_data, loc_labels = next(self.edit_gen)
+            outer_data, outer_labels, inner_data, inner_labels, loc_data, loc_labels = next(self.train_edit_gen)
             outer_data = outer_data.to(self.device)
             outer_labels = outer_labels.to(self.device)
             inner_data = inner_data.to(self.device)
@@ -108,14 +112,14 @@ class EditTrainer(BaseTrainer):
         info_dict = {}
         self.model.eval()
 
-        for factor in (1, 2, 4):
+        for factor in self.val_factors:
             val_loader = DataLoader(
                 self.val_set,
                 batch_size=self.config.bs,
                 shuffle=True,
                 num_workers=2,
             )
-            val_edit_gen = self.val_set.edit_generator(batch_size=factor * self.config.edit_bs)
+            val_edit_gen = getattr(self, f"val_edit_gen{factor}")
 
             total_loss = 0.0
             total_acc1_pre = 0.0

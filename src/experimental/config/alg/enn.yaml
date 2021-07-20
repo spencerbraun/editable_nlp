@@ -5,4 +5,4 @@ learnable_lr: true
 split_params: false
 adapt_all: false
 edit_modules: null  # Which modules to adapt during edits
-first_order_maml: true
+first_order_maml: false
